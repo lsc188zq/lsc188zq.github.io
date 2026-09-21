@@ -1,0 +1,25 @@
+# 依赖
+node_modules/
+
+# 构建产物
+dist/
+.astro/
+
+# 设计讨论的中间产物，不进仓库
+.superpowers/
+
+# 日志
+npm-debug.log*
+yarn-error.log*
+
+# 环境变量
+.env
+.env.production
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 编辑器
+.vscode/
+.idea/
