@@ -1381,22 +1381,24 @@ const { Content, headings } = await render(post);
 import katexCss from 'katex/dist/katex.min.css?url';
 ```
 
-在 `<BaseLayout>` 标签内、`<div class="post-grid">` 之前加入：
+**判定条件：检查原始正文里有没有 `$` 公式标记。** 不要用 `headings` 判断——公式绝大多数在正文里而不在标题里，用标题判断会漏掉几乎所有文章，而且 `post` 上**不存在** `hasMath` 这个字段。
 
-```astro
-{headings.some((h) => h.text.includes('$')) || post.hasMath ? <link rel="stylesheet" href={katexCss} /> : null}
-```
-
-> **这一步的判定条件需要修正。** 用 `headings` 判断不可靠（公式大多在正文不在标题里）。改为：在 `PostLayout.astro` frontmatter 里直接检查原始正文是否含公式标记：
+在 `PostLayout.astro` 的 frontmatter 里加：
 
 ```js
 const body = post.body ?? '';
-// 去掉代码块后再判断，避免代码里的 $ 造成误判
+// 先去掉代码块，避免代码里的 $ 造成误判（样例里就有一段含 $100 和 $sum$ 的 C++）
 const bodyNoCode = body.replace(/```[\s\S]*?```/g, '');
 const hasMath = /\$[^$\n]+\$|\$\$[\s\S]+?\$\$/.test(bodyNoCode);
 ```
 
-然后把上面的条件替换为 `{hasMath && <link rel="stylesheet" href={katexCss} />}`。
+然后在 `<BaseLayout>` 标签内、`<div class="post-grid">` 之前加入：
+
+```astro
+{hasMath && <link rel="stylesheet" href={katexCss} />}
+```
+
+（`<link rel="stylesheet">` 在 `<body>` 内是合法的——`stylesheet` 属于 HTML 规范里的 "body-ok" link 类型，浏览器会正常加载。）
 
 - [ ] **Step 5: 构建并验证**
 
@@ -1418,9 +1420,11 @@ node scripts/shot.mjs "http://localhost:4321/posts/_sample" post dark
 
 1. 标题下方显示 `2026-01-01`、`知识`、`约 N 分钟`
 2. 标签是 `#测试` `#公式`
-3. **右侧有目录**，列出「行内公式」「块级公式」「代码块里的危险字符」「标题层级」「三级标题」「四级标题」等
+3. **右侧有目录**，列出 6 项：「行内公式」「块级公式」「代码块里的危险字符」「标题层级」「三级标题」「另一个三级标题」。**「四级标题」不应该出现**——目录组件只收录 `depth === 2` 和 `depth === 3`（`TableOfContents` 里的过滤条件）。若你看到 7 项含四级标题，说明过滤没生效；若少了几项，说明 `headings` 没拿到
 4. 公式渲染为数学符号（KaTeX 样式已加载）
 5. 「行内公式」「块级公式」等标题在目录里可点击
+
+**本任务验证不到的一项：上一页/下一页。** 此时全库只有 `_sample.md` 一篇文章，`prev` 和 `next` 都是 `undefined`，`.pn` 那一段根本不会渲染。这是**预期**，不是缺陷。上下篇要等 **Task 11** 迁移完 36 篇才有内容可验——已记入台账，届时补验（含首篇无「上一篇」、末篇无「下一篇」两个边界）。
 
 - [ ] **Step 6: 验证目录滚动高亮**
 
@@ -1436,7 +1440,11 @@ node -e "import('playwright-core').then(async({chromium})=>{const b=await chromi
 node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage();await p.goto('http://localhost:4321/posts/_sample');const has=await p.\$\$eval('link[href*=katex]',n=>n.length);const cls=await p.\$\$eval('.katex',n=>n.length);console.log('katex样式链接:',has,'| .katex元素:',cls);await b.close();})"
 ```
 
-预期：`katex样式链接: 1 | .katex元素: 4`（样例里有 4 个公式）。
+预期：`katex样式链接: 1 | .katex元素: 2`。
+
+**为什么是 2 不是 4**：样例里虽然有 4 种公式写法，但 `remark-math` 只认 `$` 定界符——`$O(n \log n)$` 和 `$$...$$` 会渲染（各产生 1 个 `.katex`），而 `\(...\)` 和 `\[...\]` 原样显示为文本、**不产生 `.katex` 元素**。这与 Task 2 的裁决（Ruling 6）是同一件事。看到 2 是正确的；看到 4 反而说明管线以某种方式渲染了它不该认的定界符。
+
+顺带：这条预期**不能**用「公式有没有显示出来」来判断，因为只有 2 个会显示——这正是这个数字的意义。Task 10 完成后，`\(...\)` / `\[...\]` 会由同步脚本归一成 `$` 形式，届时（在真实文章上）应变成 4。
 
 - [ ] **Step 8: 提交**
 
