@@ -616,9 +616,13 @@ a:hover { text-decoration: underline; }
 修改 `src/pages/posts/[...slug].astro`，在 **frontmatter** 中用 import 引入样式（不是 `<link>` 标签）：
 
 ```astro
-import '../styles/global.css';
-import '../styles/prose.css';
+import '../../styles/global.css';
+import '../../styles/prose.css';
 ```
+
+**注意是 `../../styles/`，不是 `../styles/`。** 本文件在 `src/pages/posts/`，比 `src/layouts/` 深一层，要退两级才到 `src/`。写成 `../styles/` 会解析到不存在的 `src/pages/styles/`，构建时 Vite 解析失败。
+
+（其余任务里出现的 `../styles/` 是正确的，不要一律改成 `../../`：`BaseLayout.astro` 和 `PostLayout.astro` 在 `src/layouts/`，`about.astro` 在 `src/pages/`，它们退一级就够。判断依据是**文件自身的层数**，不是抄哪一处。）
 
 **必须用 import，不能用 `<link href="/src/styles/...">`。** `src/` 下的文件由 Vite 处理，`<link>` 指向的原始路径在构建产物里不存在，生产环境下会 404 —— 而开发模式下可能看起来正常，是最容易蒙混过关的一类错误。
 
