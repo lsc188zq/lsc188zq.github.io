@@ -1,0 +1,45 @@
+<script>
+  const FOLD_THRESHOLD = 40;
+
+  function enhance() {
+    document.querySelectorAll('.prose pre').forEach((pre) => {
+      if (pre.dataset.enhanced) return;
+      pre.dataset.enhanced = '1';
+
+      const code = pre.querySelector('code');
+      const lineCount = code ? code.querySelectorAll('.line').length : 0;
+
+      // 过长则折叠。用原生 <details> 而非 JS，零脚本开销且键盘可操作。
+      if (lineCount > FOLD_THRESHOLD && !pre.closest('details')) {
+        const details = document.createElement('details');
+        details.className = 'code-fold';
+        const summary = document.createElement('summary');
+        summary.textContent = `展开全部（${lineCount} 行）`;
+        pre.parentNode.insertBefore(details, pre);
+        details.appendChild(summary);
+        details.appendChild(pre);
+      }
+
+      // 复制按钮
+      const btn = document.createElement('button');
+      btn.className = 'copy-btn';
+      btn.type = 'button';
+      btn.textContent = '复制';
+      btn.addEventListener('click', async () => {
+        const text = code ? code.textContent : pre.textContent;
+        try {
+          await navigator.clipboard.writeText(text);
+          btn.textContent = '已复制';
+        } catch {
+          btn.textContent = '复制失败';
+        }
+        setTimeout(() => { btn.textContent = '复制'; }, 1500);
+      });
+      pre.appendChild(btn);
+
+      // 折叠时按钮被藏在 details 内，复制按钮跟着一起隐藏是可接受的
+    });
+  }
+
+  enhance();
+</script>

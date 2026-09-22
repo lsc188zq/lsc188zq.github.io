@@ -81,3 +81,90 @@
   overflow-y: hidden;
   padding: 4px 0;
 }
+
+/* ---------- 代码块 ---------- */
+
+.prose pre {
+  position: relative;
+  background: var(--card) !important;
+  border: 1px solid var(--bd);
+  border-radius: 8px;
+  padding: 13px 15px;
+  margin: 0 0 20px;
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.75;
+  white-space: pre;
+}
+
+.prose pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: inherit;
+  counter-reset: line;
+}
+
+/* 行号：用 CSS 计数器，零 JavaScript */
+.prose pre code .line::before {
+  counter-increment: line;
+  content: counter(line);
+  display: inline-block;
+  width: 2.2em;
+  margin-right: 1.2em;
+  text-align: right;
+  color: var(--fa);
+  opacity: .55;
+  user-select: none;
+}
+
+/*
+  Shiki 双主题：defaultColor:false 让每个 token 带上 --shiki-light / --shiki-dark
+  两组变量，这里按当前主题选用。
+*/
+html[data-theme="dark"] .prose pre code span {
+  color: var(--shiki-dark) !important;
+}
+html[data-theme="light"] .prose pre code span {
+  color: var(--shiki-light) !important;
+}
+
+/* 超长代码折叠：原生 <details>，零 JavaScript */
+.prose details.code-fold {
+  margin: 0 0 20px;
+  border: 1px solid var(--bd);
+  border-radius: 8px;
+  background: var(--card);
+}
+.prose details.code-fold > summary {
+  cursor: pointer;
+  padding: 9px 15px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--ac);
+  user-select: none;
+}
+.prose details.code-fold > summary:hover { background: var(--chip); }
+.prose details.code-fold[open] > summary { border-bottom: 1px solid var(--bd); }
+.prose details.code-fold pre { margin: 0; border: 0; border-radius: 0; }
+
+/* 复制按钮 */
+.prose .copy-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--mu);
+  background: var(--chip);
+  border: 1px solid var(--bd);
+  border-radius: 5px;
+  padding: 3px 8px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity .15s, color .15s;
+}
+.prose pre:hover .copy-btn { opacity: 1; }
+.prose .copy-btn:hover { color: var(--ac); }
+.prose .copy-btn:focus-visible { opacity: 1; }
