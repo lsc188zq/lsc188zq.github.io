@@ -17,6 +17,7 @@
 - **Content Layer API**：用 `glob()` loader；渲染用 `render(post)` 返回 `{ Content, headings }`；条目标识用 `post.id`。
 - **Node 版本下限**：≥ 22.12.0（Astro 7 要求）。本机 22.13.0。
 - **npm registry**：`https://registry.npmmirror.com`（已配置）。**不要修改它。**
+- **`@astrojs/markdown-remark` 必须在 dependencies 里**（`^7.3.1`）。Astro 7 的默认 Markdown 处理器换成了 Rust 的 Sätteri；一旦 `markdown.remarkPlugins`/`rehypePlugins` 非空，就必须有 unified 处理器，也就是这个包。它被 astro 声明为 **optional peer**（`peerDependenciesMeta.optional = true`），npm **不会**自动装，缺失时 `npm run build` 直接报错。T1 已装入，后续任务不要再动它。
 - **禁止 `npm run build` 之外的构建方式**；不要引入 UI 框架（React/Vue/Svelte）。
 - **浏览器的获取方式**：一律用 **`playwright-core`**（项目依赖）+ `chromium.launch({ channel: 'msedge' })` 驱动**系统自带的 Edge**。
   - **禁止** `playwright install`：浏览器内核从 `cdn.playwright.dev` 下载，本机实测超时失败，且不受 npm 镜像覆盖。
@@ -272,6 +273,7 @@ git commit -m "chore: Astro 项目脚手架与截图工具"
 
 **Files:**
 - Create: `src/content.config.ts`
+- Create: `src/constants.ts`（Step 1；无依赖的普通模块，供组件安全导入分类枚举）
 - Create: `src/content/blog/_sample.md`（临时样例，Task 10 删除）
 
 **Interfaces:**
@@ -437,7 +439,7 @@ node scripts/shot.mjs "http://localhost:4321/posts/_sample" sample dark
 2. 两个块级公式居中独立成行
 3. C++ 代码块**有颜色高亮**（不是纯黑文字）
 4. 代码块里 `$100`、`#define`、`$sum$` **原样显示**，没有被吃掉
-5. 页面顶部显示「标题数：5」（两个 `##`、两个 `###`、一个 `####`）
+5. 页面顶部显示「标题数：7」（样例里是 **4 个 `##`、2 个 `###`、1 个 `####`**：行内公式 / 块级公式 / 代码块里的危险字符 / 标题层级 / 三级标题 / 四级标题 / 另一个三级标题）。数不对就是 `headings` 没拿到，别改断言去迁就实际值——先查为什么
 
 任何一项不符，先停下修好再继续——后面的任务都建立在这条管线上。
 
