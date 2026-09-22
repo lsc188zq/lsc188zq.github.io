@@ -56,20 +56,34 @@ const toc = headings.filter((h) => h.depth === 2 || h.depth === 3);
 
 <script>
   const links = Array.from(document.querySelectorAll('.toc-link'));
-  const targets = links
-    .map((l) => document.getElementById(l.dataset.target))
-    .filter((el) => el !== null);
 
-  if (targets.length) {
-    const obs = new IntersectionObserver(
-      (entries) => {
-        for (const e of entries) {
-          if (!e.isIntersecting) continue;
-          links.forEach((l) => l.classList.toggle('on', l.dataset.target === e.target.id));
-        }
-      },
-      { rootMargin: '0px 0px -70% 0px', threshold: 0 }
-    );
-    targets.forEach((t) => obs.observe(t));
-  }
+  // 缓存每个标题的**文档绝对位置**。getBoundingClientRect().top + scrollY 与当前
+  // 滚动位置无关，所以只需在加载和 resize 时各算一次——scroll 回调里就不读布局了。
+  let tops = [];
+  const measure = () => {
+    tops = links.map((l) => {
+      const el = document.getElementById(l.dataset.target);
+      return el ? el.getBoundingClientRect().top + scrollY : Infinity;
+    });
+  };
+
+  const LINE = 0.3; // 参考线取视口高度的 30%
+
+  const sync = () => {
+    const y = scrollY + innerHeight * LINE;
+    const atBottom = scrollY + innerHeight >= document.documentElement.scrollHeight - 2;
+    // 滚到底时，末尾几节的标题因为**无处可滚**，永远到不了参考线——没有这一条，
+    // 目录里最后几节永远高亮不了，点它们的链接也毫无反应。
+    // 已实测：点「另一个三级标题」跳到底部后，原实现的高亮项是空数组。
+    let idx = atBottom ? links.length - 1 : 0;
+    if (!atBottom) {
+      for (let i = 0; i < tops.length; i++) if (tops[i] <= y) idx = i;
+    }
+    links.forEach((l, i) => l.classList.toggle('on', i === idx));
+  };
+
+  measure();
+  sync();
+  addEventListener('scroll', sync, { passive: true });
+  addEventListener('resize', () => { measure(); sync(); });
 </script>
