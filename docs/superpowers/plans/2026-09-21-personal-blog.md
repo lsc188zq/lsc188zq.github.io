@@ -26,8 +26,14 @@
 - **分类枚举固定为 6 个**：`知识`、`技术`、`项目`、`书单`、`游记`、`杂谈`。写错必须让构建失败。
 - **颜色令牌**：深色为主题默认值，**不跟随系统偏好**。
 - **正文禁用等宽字体**（中文无等宽字形，会 fallback 导致中英混排字形不统一）。等宽只用于代码块、日期、标签、logo。
-- **自有 JavaScript 总量上限约 60 行**（不含第三方的 Pagefind 与 giscus）。
+- **自有 JavaScript 总量上限 ~90 行 / 3 KB**（内联 + 打包，不含第三方的 Pagefind 与 giscus）。
+  - 设计文档第 10 节的「~60 行」是**动手前的估算**（深色模式 ~10、分类筛选 ~20、目录高亮 ~15、代码复制 ~15）。落地后有三处超出，且超出的部分都是**必须的**，不是膨胀：
+    - 深色模式 10 → ~26：多了 `localStorage` 异常兜底（读、写各一处）与 `aria-label` 随状态更新。
+    - 目录高亮 15 → ~18。
+    - 代码复制 15 → ~25：设计文档把「超长折叠」记为 0 行（`<details>` 是原生元素），但**折叠的判定与包裹仍然需要 JS**——Markdown 里作者写的是普通围栏代码块，构建产物里根本没有 `<details>`，得靠脚本数 `.line` 再包一层。
+  - **判据是体积不是行数**：自有 JS 超过 3 KB 才算失控，行数只作参考。这条是**对设计文档的已知偏离**，不是重新定义约束。
 - **`src/content/blog/` 是派生目录**，由同步脚本生成，**任何任务都不得手工编辑其中内容**。
+  - **唯一例外：`_sample.md` 是手工编写的测试夹具**（T2 创建、T7 追加一个长代码块）。它不是同步脚本产生的，因此不受上一条约束——**T7 的 Step 4 追加内容是允许的**，别把它当成违反约束。它在 **T11 被显式 `rm` 删除**，不会进入发布产物。除它之外，该目录下任何文件都不得手工编辑。
 - **绝不迁移 `简历/林尚灿.md`**：含手机号等个人信息。关于页由用户自行撰写。
 - **发布白名单目录**：`OI/算法`、`OI/游记`、`文集`、`项目/游戏/三眼枪`、`学习/深度学习`。其余目录一律不发布。
 - **命令不得接管道**：`cmd | tail` 会让退出码变成 `tail` 的退出码，掩盖失败。直接运行命令，需要截断时用重定向。
@@ -1737,7 +1743,17 @@ node scripts/shot.mjs "http://localhost:4321/posts/_sample" code light
 
 预期：两张图中代码块左侧都有**灰色行号**，且**语法高亮颜色明显不同**（深色是 github-dark 配色，浅色是 github-light）。若两图颜色相同，说明 `defaultColor: false` 没生效或 `prose.css` 里那段 `--shiki-*` 规则写错了。
 
-- [ ] **Step 7: 提交**
+- [ ] **Step 7: 验证复制按钮（本任务此前唯一没有验证的交付物）**
+
+```bash
+node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage();await p.addInitScript(()=>{window.__copied=null;if(navigator.clipboard)navigator.clipboard.writeText=async t=>{window.__copied=t;};});await p.goto('http://localhost:4321/posts/_sample');const n=await p.\$\$eval('.copy-btn',x=>x.length);await p.locator('.copy-btn').first().click();await p.waitForTimeout(150);const r=await p.evaluate(()=>({copied:window.__copied,label:document.querySelector('.copy-btn').textContent}));console.log('复制按钮数:',n,'| 按钮文字:',r.label,'| 复制到字符数:',r.copied?r.copied.length:null);console.log('首行:',JSON.stringify((r.copied||'').split(String.fromCharCode(10))[0]));console.log('首行是否以数字开头(即混进了行号):',/^(\\s*)\\d/.test(r.copied||''));await b.close();})"
+```
+
+预期：`复制按钮数: 2`（两个代码块各一个）｜`按钮文字: 已复制`｜`复制到字符数` 大于 0｜`首行` 是 `"#include <bits/stdc++.h>"`｜`首行是否以数字开头(即混进了行号): false`。
+
+**为什么这条不能省。** 行号是纯 CSS 计数器（`content: counter(line)`）生成的，**不是 DOM 文本**，所以 `code.textContent` 天然不含行号——但这恰恰是最容易被后人改坏的地方：哪天有人把行号改成真实的 DOM 元素，复制出来的每一行前面就会多一个数字，**而这种回归在截图里完全看不出来**（截图里两者长得一模一样）。这条探针一次验证三件事：按钮存在、点击真的调用了剪贴板、复制内容不含行号。
+
+- [ ] **Step 8: 提交**
 
 ```bash
 git add -A
@@ -3165,21 +3181,25 @@ node -e "import('playwright-core').then(async({chromium})=>{const b=await chromi
 
 确认卡片变成单列、导航不溢出。
 
-**核对 JavaScript 预算**（设计文档第 10 节要求自有 JS ≤ ~60 行）：
+**核对 JavaScript 预算**（全局约束：自有 JS ≤ ~90 行 / 3 KB，**不含 `pagefind/`**）。
+
+这条必须**同时**跨过内联与打包两类脚本。注意「只数内联脚本」是测不出预算的——自家的主题切换、分类筛选、目录高亮、代码复制/折叠**全部是打包后的外部 `.js`**，页面上唯一的内联脚本只有 `<head>` 里那个 FOUC IIFE。所以下面这条命令按**文件**列出并累加：
 
 ```bash
-node -e "import('fs').then(async fs=>{const p='dist';const out=[];async function walk(d){for(const e of await fs.readdirSync(d,{withFileTypes:true})){const f=d+'/'+e.name;if(e.isDirectory())await walk(f);else if(e.name.endsWith('.js'))out.push([f,fs.statSync(f).size]);}}await walk(p);out.sort((a,b)=>b[1]-a[1]);for(const[f,s]of out)console.log((s/1024).toFixed(1).padStart(8)+' KB  '+f);})"
+node -e "import('fs').then(async fs=>{const out=[];async function walk(d){for(const e of await fs.readdirSync(d,{withFileTypes:true})){const f=d+'/'+e.name;if(e.isDirectory())await walk(f);else if(e.name.endsWith('.js')&&!f.includes('pagefind')){const s=fs.readFileSync(f,'utf8');out.push([f,s.split('\n').filter(l=>l.trim()).length,fs.statSync(f).size]);}}}await walk('dist');out.sort((a,b)=>b[2]-a[2]);let L=0,B=0;for(const[f,l,b]of out){L+=l;B+=b;console.log(String(l).padStart(5)+' 行 '+String((b/1024).toFixed(1)).padStart(7)+' KB  '+f);}console.log('-----');console.log('自有 JS 合计: '+L+' 行 / '+(B/1024).toFixed(1)+' KB');})"
 ```
 
-预期：体积最大的应该是 `pagefind/` 下的文件（第三方，不计入预算）。**不应出现体积异常的自家脚本**。若某天发现自己写的 JS 超过 3KB，说明有逻辑失控了——本项目的自有脚本只有主题切换、分类筛选、目录高亮、代码复制四件事。
+预期：合计 **≤ 90 行 / ≤ 3 KB**。**判据是体积**——超过 3 KB 才算失控；行数只作参考。
 
-也可以用下面的命令直接确认页面内联脚本的行数：
+若列表里出现了**你不认识的文件**（例如某个 Astro 注入的 runtime chunk），**原样报上来，不要自行归类为"第三方、不计入"**——那正是这条检理想的漏掉的东西。
+
+再单独确认一次内联脚本（只为证明 FOUC 脚本确实是内联的，不是拿来当预算的）：
 
 ```bash
 node -e "import('fs').then(fs=>{const h=fs.readFileSync('dist/index.html','utf8');const m=[...h.matchAll(/<script(?![^>]*src)[^>]*>([\s\S]*?)<\/script>/g)];let n=0;for(const x of m)n+=x[1].split('\n').filter(l=>l.trim()).length;console.log('首页内联脚本行数:',n);})"
 ```
 
-预期：个位数到二十几行之间。
+预期：**个位数**（只有 FOUC 那个 IIFE，约 8 行）。若这里冒出二十几行，说明有脚本没被打包而是内联进了页面——那要查清楚，别当好事。
 
 - [ ] **Step 6: 提交**
 
