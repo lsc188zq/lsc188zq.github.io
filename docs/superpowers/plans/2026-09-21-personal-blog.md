@@ -628,7 +628,7 @@ import '../styles/prose.css';
     <article class="prose"><Content /></article>
 ```
 
-- [ ] **Step 4: 构建并截图**
+- [ ] **Step 4: 构建并截图（浅色＝默认态）**
 
 ```bash
 npm run build
@@ -641,20 +641,24 @@ npm run preview
 另开终端：
 
 ```bash
-node scripts/shot.mjs "http://localhost:4321/posts/_sample" prose dark
-```
-
-预期：`.shots/prose-dark.png` 中正文为浅色文字、深色背景，标题 `##` 下方有分隔线。
-
-- [ ] **Step 5: 验证浅色主题令牌**
-
-临时把 `src/pages/posts/[...slug].astro` 的 `<html>` 标签改为 `<html lang="zh-CN" data-theme="light">`，重新构建并截图：
-
-```bash
 node scripts/shot.mjs "http://localhost:4321/posts/_sample" prose light
 ```
 
-预期：`.shots/prose-light.png` 为浅色背景深色文字。**确认后把 `data-theme="light"` 删掉**（Task 4 会用脚本动态设置）。
+预期：`.shots/prose-light.png` 为浅色背景深色文字，标题 `##` 下方有分隔线。
+
+**注意：`shot.mjs` 的第三个参数（`light`/`dark`）在本任务中不生效。** 它的机制是写 `localStorage` 后刷新页面，而读这个值的脚本要到 **Task 4** 才存在。此刻 `<html>` 上没有 `data-theme` 属性，页面一律走 `:root` 的浅色令牌——**传 `dark` 也只会得到浅色图**。这里传 `light` 只为让截图文件名与内容相符。
+
+- [ ] **Step 5: 验证深色主题令牌**
+
+临时把 `src/pages/posts/[...slug].astro` 的 `<html>` 标签改为 `<html lang="zh-CN" data-theme="dark">`（这是本阶段唯一能真正触发深色令牌的手段），重新构建并截图：
+
+```bash
+node scripts/shot.mjs "http://localhost:4321/posts/_sample" prose dark
+```
+
+预期：`.shots/prose-dark.png` 为深色背景浅色文字，且背景应是 `#0d1117` 而非纯黑。**关键交叉检查：这张图必须与 Step 4 的浅色图明显不同。** 两图若一模一样，说明 `html[data-theme="dark"]` 那段令牌没生效，先修好再继续。
+
+**确认后必须把 `data-theme="dark"` 删掉**（Task 4 会用脚本动态设置）。忘了删的后果不只是"多一个属性"——全站会被钉死在深色，而且 Task 4 做主题切换时会看起来"不生效"，届时很难定位。
 
 - [ ] **Step 6: 提交**
 
