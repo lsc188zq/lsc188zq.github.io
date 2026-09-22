@@ -1832,23 +1832,31 @@ npm run preview
 另开终端：
 
 ```bash
-node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage({viewport:{width:1100,height:900}});await p.goto('http://localhost:4321/posts/_sample');const f=await p.\$\$eval('details.code-fold',n=>n.length);const s=await p.\$\$eval('details.code-fold > summary',n=>n.map(x=>x.textContent));console.log('折叠块:',f,'|',s);const ln=await p.evaluate(()=>{const el=document.querySelector('.prose pre code .line');if(!el)return {found:false};const before=getComputedStyle(el,'::before');const code=getComputedStyle(el.parentElement);return {found:true,content:before.content,counterReset:code.counterReset,lineCount:el.parentElement.querySelectorAll('.line').length};});console.log('行号 ::before:',JSON.stringify(ln));await b.close();})"
+node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage({viewport:{width:1100,height:900}});await p.goto('http://localhost:4321/posts/_sample');const f=await p.\$\$eval('details.code-fold',n=>n.length);const s=await p.\$\$eval('details.code-fold > summary',n=>n.map(x=>x.textContent));console.log('折叠块:',f,'|',s);const ln=await p.evaluate(()=>{const el=document.querySelector('.prose pre code .line');if(!el)return {found:false};const before=getComputedStyle(el,'::before');const code=getComputedStyle(el.parentElement);return {found:true,content:before.content,counterIncrement:before.counterIncrement,counterReset:code.counterReset,lineCount:el.parentElement.querySelectorAll('.line').length};});console.log('行号 ::before:',JSON.stringify(ln));await b.close();})"
 ```
 
 预期：`折叠块: 1 | ['展开全部（N 行）']`，**N 必须 ≥ 49**；再加一行
 
 ```
-行号 ::before: {"found":true,"content":"counter(line)","counterReset":"line 0","lineCount":49}
+行号 ::before: {"found":true,"content":"counter(line)","counterIncrement":"line 1","counterReset":"line 0","lineCount":49}
 ```
 
 三个判据：
 
 - **`N ≥ 49`，不是 `N ≥ 41`。** 那个代码块本身就是 **49 行**（Step 4 的 `#include` 到最后的 `}`，数一遍就是 49），渲染出来的 `.line` 只可能 **≥ 49**（末尾空行可能多出一个）。写 `≥ 41` 的话，**一个只渲染出 41 行的截断代码块照样通过**——而阈值是 40，41 也满足 `> 40`，折叠块数还是 1，**前两条断言全都看不出来**。下界必须贴着实际行数写。
 - **`found` 必须是 `true`**：说明 Shiki 真的产出了 `.line` 元素。`false` 就说明行号方案的前提不成立（此时 `折叠块:` 多半也会是 0 或 1 以外的值）。
-- **`content` 必须含 `counter(line)`，`counterReset` 必须含 `line`**：这两条一起才证明**行号真的会渲染出来**。行号是纯 CSS 计数器生成的，**不在 DOM 里**，所以它坏掉时——`.prose pre code .line::before` 这条规则没匹配上、或者 `counter-reset: line` 忘了写——**页面上什么都不会显示，而 `折叠块:`、`卡片数`、截图上"有没有行号"之外的一切断言全都是绿的**。截图那张是人眼看的，这条是自动的。
-  - 不要断言 `counterReset` 精确等于 `line`：Chromium 的计算值是 `line 0`。判据是**含 `line`**，不是等于。
+- **`content` 必须含 `counter(line)`、`counterIncrement` 必须含 `line`、`counterReset` 必须含 `line`——三条缺一不可**：这才是「行号真的会渲染出数字」的完整证据。行号是纯 CSS 计数器生成的，**不在 DOM 里**，所以它坏掉时**页面上什么都不会显示，而 `折叠块:`、`复制按钮数`、以及除 Step 6 那张人眼截图之外的一切断言全都是绿的**。截图那张是人眼看的，这条是自动的。三条各排掉一种坏法：
 
-**注意这条探针跑在 Step 1 的 CSS 已经落地之后**，所以它此刻是绿的；若要确认它有判别力，把 `.line::before` 那条规则的 `content: counter(line)` 临时注释掉，`content` 会变成 `none`。
+  | 判据 | 排掉的坏法 | 只看另外两条会漏掉什么 |
+  |---|---|---|
+  | `content` 含 `counter(line)` | `.prose pre code .line::before` 整条规则没匹配上（`content` 变成 `none`） | — |
+  | `counterReset` 含 `line` | `code` 上的 `counter-reset: line` 漏写 | 计数器不归零，行号从上一块接着数 |
+  | `counterIncrement` 含 `line` | `::before` 上的 `counter-increment: line` 漏写 | **计数器恒为 0，每一行都显示 `0`**——`content` 和 `counterReset` **两条都照样是绿的** |
+
+  最后一行是本条补丁的重点：**光看 `content` 的字符串值证明不了里面有数字**，`counterIncrement` 才是那个字面量。
+  - 不要断言它们精确相等：Chromium 把 `counter-reset: line` 报成 `line 0`、把 `counter-increment: line` 报成 `line 1`（**已实测**）。判据是**含 `line`**，不是等于。
+
+**已由控制器实测**（在一个独立临时页面上跑的，不依赖本仓库构建）：规则生效时三条读数为 `content:"counter(line)"` / `counterIncrement:"line 1"` / `counterReset:"line 0"`；把 `content` 抹成 `none` 后 `content` 读 `"none"`。判据有判别力。页面截图确认渲染出 `1 / 2 / 3`。
 
 - [ ] **Step 6: 截图确认行号与主题配色**
 
