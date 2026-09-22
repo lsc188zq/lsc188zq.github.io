@@ -18,7 +18,10 @@
 - **Node 版本下限**：≥ 22.12.0（Astro 7 要求）。本机 22.13.0。
 - **npm registry**：`https://registry.npmmirror.com`（已配置）。**不要修改它。**
 - **禁止 `npm run build` 之外的构建方式**；不要引入 UI 框架（React/Vue/Svelte）。
-- **禁止使用 `playwright install`**：浏览器内核 CDN 在本机不可达，一律用 `chromium.launch({ channel: 'msedge' })`。
+- **浏览器的获取方式**：一律用 **`playwright-core`**（项目依赖）+ `chromium.launch({ channel: 'msedge' })` 驱动**系统自带的 Edge**。
+  - **禁止** `playwright install`：浏览器内核从 `cdn.playwright.dev` 下载，本机实测超时失败，且不受 npm 镜像覆盖。
+  - **禁止**依赖全局安装的 `playwright`：Node 的 ESM 解析不到全局包，裸导入会报 `ERR_MODULE_NOT_FOUND`（已实测确认）。
+  - `playwright-core` **不下载任何浏览器**，安装仅 1 个包、约 2 秒，且能正常驱动系统 Edge（已实测确认）。
 - **分类枚举固定为 6 个**：`知识`、`技术`、`项目`、`书单`、`游记`、`杂谈`。写错必须让构建失败。
 - **颜色令牌**：深色为主题默认值，**不跟随系统偏好**。
 - **正文禁用等宽字体**（中文无等宽字形，会 fallback 导致中英混排字形不统一）。等宽只用于代码块、日期、标签、logo。
@@ -104,6 +107,7 @@
   "devDependencies": {
     "@astrojs/check": "^0.9.4",
     "pagefind": "^1.5.2",
+    "playwright-core": "^1.56.0",
     "typescript": "^5.6.3"
   }
 }
@@ -189,7 +193,7 @@ dist/
 ```js
 // 开发工具：用系统 Edge 给页面截图，供人工与 Claude 检查渲染结果。
 // 用法: node scripts/shot.mjs <url> <输出名> [light|dark]
-import { chromium } from 'playwright';
+import { chromium } from 'playwright-core';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 
@@ -229,11 +233,9 @@ if (errors.length) {
 }
 ```
 
-`playwright` 从全局安装解析。若 `import 'playwright'` 报 `ERR_MODULE_NOT_FOUND`，改为绝对路径导入：
+用 `playwright-core` 而非 `playwright`。两者的 API 完全一致，区别只在：`playwright` 会在安装时下载浏览器内核（本机必失败），`playwright-core` 不会。
 
-```js
-import { chromium } from 'file:///C:/Users/21004/AppData/Roaming/npm/node_modules/playwright/index.mjs';
-```
+**不要**改成导入全局安装的 `playwright`——Node 的 ESM 解析不到全局包，`import 'playwright'` 会报 `ERR_MODULE_NOT_FOUND`（已实测确认，不是猜测）。
 
 - [ ] **Step 8: 验证构建**
 
@@ -608,12 +610,14 @@ a:hover { text-decoration: underline; }
 
 - [ ] **Step 3: 引入样式并验证**
 
-修改 `src/pages/posts/[...slug].astro`，在 `<head>` 内追加：
+修改 `src/pages/posts/[...slug].astro`，在 **frontmatter** 中用 import 引入样式（不是 `<link>` 标签）：
 
 ```astro
-    <link rel="stylesheet" href="/src/styles/global.css" />
-    <link rel="stylesheet" href="/src/styles/prose.css" />
+import '../styles/global.css';
+import '../styles/prose.css';
 ```
+
+**必须用 import，不能用 `<link href="/src/styles/...">`。** `src/` 下的文件由 Vite 处理，`<link>` 指向的原始路径在构建产物里不存在，生产环境下会 404 —— 而开发模式下可能看起来正常，是最容易蒙混过关的一类错误。
 
 并给 `<article>` 加上 `class="prose"`：
 
@@ -871,7 +875,7 @@ node scripts/shot.mjs "http://localhost:4321/posts/_sample" theme light
 用 Playwright 检查首帧就是深色（而不是先浅后深）：
 
 ```bash
-node -e "import('playwright').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage();await p.goto('http://localhost:4321/posts/_sample');const c=await p.evaluate(()=>getComputedStyle(document.documentElement).backgroundColor);console.log('首帧背景:',c);await b.close();})"
+node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage();await p.goto('http://localhost:4321/posts/_sample');const c=await p.evaluate(()=>getComputedStyle(document.documentElement).backgroundColor);console.log('首帧背景:',c);await b.close();})"
 ```
 
 预期：输出 `首帧背景: rgb(13, 17, 23)`。若是 `rgb(255, 255, 255)`，说明内联脚本没生效或位置不对。
@@ -1092,7 +1096,7 @@ node scripts/shot.mjs "http://localhost:4321/" home dark
 - [ ] **Step 5: 验证筛选真的生效**
 
 ```bash
-node -e "import('playwright').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage();await p.goto('http://localhost:4321/');await p.click('.cf-btn[data-cat=\"知识\"]');await p.waitForTimeout(200);const vis=await p.\$\$eval('.card:not([hidden])',n=>n.length);const st=await p.textContent('#list-status');console.log('可见卡片:',vis,'| 状态行:',st);await p.screenshot({path:'.shots/home-filtered.png',fullPage:true});await b.close();})"
+node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage();await p.goto('http://localhost:4321/');await p.click('.cf-btn[data-cat=\"知识\"]');await p.waitForTimeout(200);const vis=await p.\$\$eval('.card:not([hidden])',n=>n.length);const st=await p.textContent('#list-status');console.log('可见卡片:',vis,'| 状态行:',st);await p.screenshot({path:'.shots/home-filtered.png',fullPage:true});await b.close();})"
 ```
 
 预期：`可见卡片: 1 | 状态行: 知识 · 1 篇`。若可见数为 0，检查 `PostCard` 的 `data-category` 是否与 `CATEGORIES` 里的字符串完全一致（含中文，不能有空格差异）。
@@ -1398,7 +1402,7 @@ node scripts/shot.mjs "http://localhost:4321/posts/_sample" post dark
 - [ ] **Step 6: 验证目录滚动高亮**
 
 ```bash
-node -e "import('playwright').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage({viewport:{width:1100,height:800}});await p.goto('http://localhost:4321/posts/_sample');await p.evaluate(()=>window.scrollTo(0,document.body.scrollHeight*0.6));await p.waitForTimeout(600);const on=await p.\$\$eval('.toc-link.on',n=>n.map(x=>x.textContent));console.log('高亮的目录项:',on);await b.close();})"
+node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage({viewport:{width:1100,height:800}});await p.goto('http://localhost:4321/posts/_sample');await p.evaluate(()=>window.scrollTo(0,document.body.scrollHeight*0.6));await p.waitForTimeout(600);const on=await p.\$\$eval('.toc-link.on',n=>n.map(x=>x.textContent));console.log('高亮的目录项:',on);await b.close();})"
 ```
 
 预期：输出非空数组，且高亮的项目与页面滚动到的位置相符（不是永远高亮第一项）。
@@ -1406,7 +1410,7 @@ node -e "import('playwright').then(async({chromium})=>{const b=await chromium.la
 - [ ] **Step 7: 验证公式样式按需加载**
 
 ```bash
-node -e "import('playwright').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage();await p.goto('http://localhost:4321/posts/_sample');const has=await p.\$\$eval('link[href*=katex]',n=>n.length);const cls=await p.\$\$eval('.katex',n=>n.length);console.log('katex样式链接:',has,'| .katex元素:',cls);await b.close();})"
+node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage();await p.goto('http://localhost:4321/posts/_sample');const has=await p.\$\$eval('link[href*=katex]',n=>n.length);const cls=await p.\$\$eval('.katex',n=>n.length);console.log('katex样式链接:',has,'| .katex元素:',cls);await b.close();})"
 ```
 
 预期：`katex样式链接: 1 | .katex元素: 4`（样例里有 4 个公式）。
@@ -1666,7 +1670,7 @@ npm run preview
 另开终端：
 
 ```bash
-node -e "import('playwright').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage({viewport:{width:1100,height:900}});await p.goto('http://localhost:4321/posts/_sample');const f=await p.\$\$eval('details.code-fold',n=>n.length);const s=await p.\$\$eval('details.code-fold > summary',n=>n.map(x=>x.textContent));console.log('折叠块:',f,'|',s);await b.close();})"
+node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage({viewport:{width:1100,height:900}});await p.goto('http://localhost:4321/posts/_sample');const f=await p.\$\$eval('details.code-fold',n=>n.length);const s=await p.\$\$eval('details.code-fold > summary',n=>n.map(x=>x.textContent));console.log('折叠块:',f,'|',s);await b.close();})"
 ```
 
 预期：`折叠块: 1 | ['展开全部（N 行）']`，N ≥ 41。
@@ -1820,7 +1824,7 @@ npm run preview
 
 ```bash
 node scripts/shot.mjs "http://localhost:4321/tags" tags dark
-node -e "import('playwright').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage();await p.goto('http://localhost:4321/tags');const href=await p.getAttribute('.cloud-item','href');console.log('标签链接:',href);await p.click('.cloud-item');await p.waitForTimeout(300);console.log('跳转后标题:',await p.textContent('.page-title'));await b.close();})"
+node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage();await p.goto('http://localhost:4321/tags');const href=await p.getAttribute('.cloud-item','href');console.log('标签链接:',href);await p.click('.cloud-item');await p.waitForTimeout(300);console.log('跳转后标题:',await p.textContent('.page-title'));await b.close();})"
 ```
 
 预期：链接形如 `/tags/%E6%B5%8B%E8%AF%95`（浏览器地址栏会显示成中文），点击后页面标题为 `#测试`。
@@ -2832,7 +2836,7 @@ npm run preview
 另开终端：
 
 ```bash
-node -e "import('playwright').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage();const errs=[];p.on('pageerror',e=>errs.push(String(e)));await p.goto('http://localhost:4321/');await p.fill('#search-input','动态规划');await p.waitForTimeout(1800);const n=await p.\$\$eval('.sr-item',x=>x.length);const first=await p.textContent('.sr-item .sr-title').catch(()=>'(无)');console.log('结果数:',n,'| 首条:',first);console.log('页面错误:',errs.length?errs:'无');await p.screenshot({path:'.shots/search.png'});await b.close();})"
+node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage();const errs=[];p.on('pageerror',e=>errs.push(String(e)));await p.goto('http://localhost:4321/');await p.fill('#search-input','动态规划');await p.waitForTimeout(1800);const n=await p.\$\$eval('.sr-item',x=>x.length);const first=await p.textContent('.sr-item .sr-title').catch(()=>'(无)');console.log('结果数:',n,'| 首条:',first);console.log('页面错误:',errs.length?errs:'无');await p.screenshot({path:'.shots/search.png'});await b.close();})"
 ```
 
 预期：`结果数` > 0，`页面错误: 无`。若结果数为 0，先确认 `dist/pagefind/` 目录存在；若不存在，说明 `pagefind` 未正确安装或 build 脚本没生效。
@@ -2940,7 +2944,7 @@ npm run preview
 另开终端：
 
 ```bash
-node -e "import('playwright').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage();await p.goto('http://localhost:4321/');const href=await p.getAttribute('.card-title a','href');await p.goto('http://localhost:4321'+href);const has=await p.\$\$eval('.comments-placeholder',n=>n.length);console.log('占位提示:',has?'已显示':'未显示');await b.close();})"
+node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage();await p.goto('http://localhost:4321/');const href=await p.getAttribute('.card-title a','href');await p.goto('http://localhost:4321'+href);const has=await p.\$\$eval('.comments-placeholder',n=>n.length);console.log('占位提示:',has?'已显示':'未显示');await b.close();})"
 ```
 
 预期：`占位提示: 已显示`。
@@ -3103,7 +3107,7 @@ node scripts/shot.mjs "http://localhost:4321/404" final-404 dark
 **窄屏单独验证一次**：
 
 ```bash
-node -e "import('playwright').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage({viewport:{width:390,height:844},deviceScaleFactor:2});await p.goto('http://localhost:4321/');await p.screenshot({path:'.shots/mobile-home.png',fullPage:true});await b.close();})"
+node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage({viewport:{width:390,height:844},deviceScaleFactor:2});await p.goto('http://localhost:4321/');await p.screenshot({path:'.shots/mobile-home.png',fullPage:true});await b.close();})"
 ```
 
 确认卡片变成单列、导航不溢出。
