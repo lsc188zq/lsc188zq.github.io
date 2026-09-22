@@ -1473,10 +1473,16 @@ node scripts/shot.mjs "http://localhost:4321/posts/_sample" post dark
 - [ ] **Step 6: 验证目录滚动高亮**
 
 ```bash
-node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage({viewport:{width:1100,height:800}});await p.goto('http://localhost:4321/posts/_sample');await p.evaluate(()=>window.scrollTo(0,document.body.scrollHeight*0.6));await p.waitForTimeout(600);const on=await p.\$\$eval('.toc-link.on',n=>n.map(x=>x.textContent));console.log('高亮的目录项:',on);await b.close();})"
+node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage({viewport:{width:1100,height:400}});await p.goto('http://localhost:4321/posts/_sample');const m=await p.evaluate(()=>({sh:document.body.scrollHeight,vh:window.innerHeight}));console.log('页面高:',m.sh,'| 视口高:',m.vh,'| 能滚动:',m.sh>m.vh+50);await p.evaluate(()=>window.scrollTo(0,document.body.scrollHeight));await p.waitForTimeout(600);const all=await p.\$\$eval('.toc-link',n=>n.map(x=>x.textContent));const on=await p.\$\$eval('.toc-link.on',n=>n.map(x=>x.textContent));console.log('目录全部:',all);console.log('滚到底时高亮的目录项:',on);console.log('高亮的是不是永远是第一项:',on.length===1&&on[0]===all[0]);await b.close();})"
 ```
 
-预期：输出非空数组，且高亮的项目与页面滚动到的位置相符（不是永远高亮第一项）。
+预期：`能滚动: true`；`滚到底时高亮的目录项` 是**靠后的某一项**（滚到页面底部却还高亮第一项，说明 `rootMargin` 或 IntersectionObserver 没在工作）；`高亮的是不是永远是第一项: false`。
+
+**两个刻意的设计，别改**：
+- **视口高度写死 400**（不是 800）。实测（1100 宽 / 样例文章 T4 版布局）：页面高 **1120**，800 高的视口只能滚 **320px**，400 高时能滚 **720px**。800 不是滚不动，但**滚动范围太小**——"滚到底"和"刚滚一点"在 400 视口下差得足够远，高亮位置的判断才有信息量。
+- **先打印 `能滚动`**。若它输出 `false`，说明这条验证此刻**无意义**，要在报告里如实写"页面不够长，滚动高亮未能验证"，**不要当成通过**。
+
+**为什么断言是"不是第一项"**：目录高亮最容易的坏法有两种——① 观察器没工作，谁都不高亮；② 忘了把其它项的高亮摘掉，于是**永远高亮第一项**（或越滚越多）。前者会让数组为空，后者会让它等于第一项。这条断言一次盖住两种。
 
 - [ ] **Step 7: 验证公式样式按需加载**
 
