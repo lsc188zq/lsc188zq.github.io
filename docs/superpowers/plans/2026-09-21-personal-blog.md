@@ -1838,8 +1838,15 @@ node -e "import('playwright-core').then(async({chromium})=>{const b=await chromi
 预期：`折叠块: 1 | ['展开全部（N 行）']`，**N 必须 ≥ 49**；再加一行
 
 ```
-行号 ::before: {"found":true,"content":"counter(line)","counterIncrement":"line 1","counterReset":"line 0","lineCount":49}
+行号 ::before: {"found":true,"content":"counter(line)","counterIncrement":"line 1","counterReset":"line 0","lineCount":7}
 ```
+
+> **`lineCount` 是 7，不是 49 —— 这两个数说的是两件事。** 上面那条探针读的是 `document.querySelector('.prose pre code .line')`，即文章里**第一段**代码块；而 49 行的夹具按 Step 4 追加在**文末**，是**第二段**。实测 `_sample.md`：第一段在 29–37 行共 **7** 行，第二段在 49–99 行共 **49** 行。所以：
+>
+> - `lineCount: 7` 守的是「Shiki 真的产出了 `.line` 元素」——它**必须非零且等于第一段的真实行数**。写成 49 会**恒红**（除非有人正好把夹具调到文首）；写成 0 或 `found:false` 才说明行号方案的前提不成立。
+> - **49 这个数归上面的 `N ≥ 49` 管**（它读的是折叠块自己的 `<summary>` 文本），不归这条。两条断言各守一段代码块。
+>
+> 原计划在这里写 49，是一条**从未对着真夹具核过的断言**（本项目第 14 次撞上这个类别：坏掉时和好着时输出一样，或者干脆永远红）。**改动它之前，先数一遍 `_sample.md` 里的两段代码块。**
 
 三个判据：
 
@@ -3471,6 +3478,8 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - name: 把 lockfile 里的 tarball 主机改回 npmjs（原因见下方说明）
+        run: node -e "const fs=require('fs');const p='package-lock.json';fs.writeFileSync(p,fs.readFileSync(p,'utf8').replaceAll('registry.npmmirror.com','registry.npmjs.org'))"
       - run: npm ci
       - run: npm run build
       - uses: actions/upload-pages-artifact@v3
@@ -3489,6 +3498,24 @@ jobs:
 ```
 
 `npm ci` 要求仓库里有 `package-lock.json`。**确认它已被提交**（`.gitignore` 里不能有它）。
+
+> **为什么 `npm ci` 前面有一句改写：lockfile 里的 tarball 主机指向中国镜像。**
+>
+> `package-lock.json` 里 **512 个** `resolved` 全部是 `registry.npmmirror.com`（国内镜像，本机 npm 配置）。而 GitHub Actions 的 runner 在美国。问题是：`npm ci` 到底照 lockfile 的 `resolved` 拉，还是按配置的 registry 重新推导？
+>
+> **实测过：照 `resolved` 拉。** 判据实验 —— 把 lockfile 里的主机整体换成一个**不存在的域名**再真装，退出码 1、`attempt 3 failed with ENOTFOUND`，说明它真的去请求了那个假域名。**所以 `npm ci --registry=https://registry.npmjs.org/` 这类写法救不了**，必须改 lockfile 本身。不加这一步，首次部署会全部走中国 CDN：慢、可能超时，**而且报错长得跟真正的原因毫无关系**。
+>
+> 那句 `node -e` 把主机改回 `registry.npmjs.org`。它**不依赖 npm 的任何语义**——不管理论上 npm 会不会自动替换主机，改完之后这个问题不存在了。改的只有主机名：实测 512 处全替换，把主机名换回去后与原文**逐字节相同**，`integrity` 与版本一字未动，所以校验和仍然成立。
+>
+> **为什么是 `node -e` 而不是更短的 `sed -i`：两者的行为在两端不一样。** Git Bash 的 `sed` 会按文本模式打开文件，**顺手把 lockfile 里 7461 处 CRLF 全转成 LF**（本机实测）；CI 的 Linux `sed` 不会。也就是说「本机验过」这句话**不能转移**到 CI —— 我验的是 A 工具，跑的是 B 工具。`node` 读写字节、不做任何换行转换，两端行为一致，本机的验证结论才算数。
+>
+> 顺带两条，都是实测踩出来的，留着免得以后重新想一遍：
+> - **`npm ci --dry-run` 对这件事没有判别力**：空 `node_modules` 下它秒回 `up to date`、退出码 0、网络一行不碰，在「用 resolved」和「用 registry」两种情况下**逐字相同**。
+> - **测 npm 的网络行为必须给一个空的 `--cache` 目录**，否则 npm 按 integrity 哈希命中本机缓存，日志里全是 `(cache hit)`，被测的主机从头到尾没被请求过，实验等于没做。
+>
+> `cache: npm` 那行的缓存键是按**改写前**的 lockfile 算的，但这不影响正确性：npm 的缓存按 tarball 的 integrity（sha512）寻址，而改的只是主机名，哈希不变。
+>
+> **如果将来不想要这一步**：`npm config set registry https://registry.npmjs.org/` 之后删掉 `package-lock.json` 重跑 `npm install`，让 lockfile 原生指向 npmjs。代价是以后本机装包也走官方源（国内会慢）。本项目的既定选择是**保留镜像 + CI 里改写**。
 
 - [ ] **Step 4: 本地完整构建验证**
 
