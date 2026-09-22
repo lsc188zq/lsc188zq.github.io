@@ -71,7 +71,12 @@ const toc = headings.filter((h) => h.depth === 2 || h.depth === 3);
 
   const sync = () => {
     const y = scrollY + innerHeight * LINE;
-    const atBottom = scrollY + innerHeight >= document.documentElement.scrollHeight - 2;
+    // 「滚到底」必须**同时**满足「还能滚」和「确实滚到了底」。
+    // 只写 scrollY + innerHeight >= scrollHeight - 2 的话，当文章总高不超过视口时
+    // 它**恒为真**——读者明明在一篇短随笔的顶部，目录却点亮最后一节，
+    // 与他实际所在的位置不符。这和上面那条"末尾够不到参考线"是同一类缺陷，只是方向相反。
+    const maxScroll = document.documentElement.scrollHeight - innerHeight;
+    const atBottom = maxScroll > 0 && scrollY >= maxScroll - 2;
     // 滚到底时，末尾几节的标题因为**无处可滚**，永远到不了参考线——没有这一条，
     // 目录里最后几节永远高亮不了，点它们的链接也毫无反应。
     // 已实测：点「另一个三级标题」跳到底部后，原实现的高亮项是空数组。
