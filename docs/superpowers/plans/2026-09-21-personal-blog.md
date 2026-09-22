@@ -2769,13 +2769,26 @@ for (const p of published) {
 }
 
 // 源文件取消标记或已删除 → 清理旧副本
+//
+// 但有一条硬前提：本轮扫描真的读到了东西。
+// listMarkdown 对读不到的目录是**静默跳过**的（vault.mjs 的 catch 里直接 return），
+// 所以 vaultPath 写错、换设备忘了改、目录被改名，都会让 candidates 变成空数组，
+// 于是 wanted 也空——清理循环就会把 src/content/blog/ 下所有非下划线文件判为多余并删掉。
+// 此时删掉的不是「用户取消发布的文章」，而是**全部已生成的文章**。
+// 这个状态和「一篇都没标记」在日志上几乎一样，区别只在后果。
+// 空扫描一律不清理：宁可留下过期的副本，也不要在一无所获的一轮里删东西。
 const removed = [];
-for (const f of existing) {
-  if (!f.endsWith('.md')) continue;
-  if (f.startsWith('_')) continue; // 下划线开头是手工样例，不动
-  if (!wanted.has(f)) {
-    await fs.rm(path.join(OUT_DIR, f));
-    removed.push(f);
+if (candidates.length === 0) {
+  console.log(`\n[已跳过清理] vault 目录不存在或白名单目录全空: ${vaultPath}`);
+  console.log('  检查 blog.config.json 里的 vaultPath 与磁盘上的实际路径是否逐字符一致。');
+} else {
+  for (const f of existing) {
+    if (!f.endsWith('.md')) continue;
+    if (f.startsWith('_')) continue; // 下划线开头是手工样例，不动
+    if (!wanted.has(f)) {
+      await fs.rm(path.join(OUT_DIR, f));
+      removed.push(f);
+    }
   }
 }
 
@@ -2818,13 +2831,22 @@ ls -1 src/content/blog/
 
 预期：输出「已标记发布: 0 篇」，随后列出所有未标记的文件；且**两次 `ls` 的输出逐字节相同**，其中包含 `_sample.md`。
 
+
+**这个「临界状态」还有第二条到达路径，而且更危险。** `vaultPath` 写错时 `listMarkdown` 是**静默跳过**的（`vault.mjs` 里 `catch { return; }`），`candidates` 同样是空数组、`wanted` 同样空——但这一次目录里躺着的是**已经生成好的全部文章**，清理循环会把它们一次删光。所以 Step 3 的清理循环里加了一道守卫：**`candidates.length === 0` 时整段清理跳过，并打印 `[已跳过清理]`**。两条守卫各挡一个场景，**不能互相替代**：
+
+| 守卫 | 挡住的场景 |
+|---|---|
+| `if (f.startsWith('_')) continue;` | vault **读得到**、但一篇都没标记（就是上面这个场景）——保住 `_sample.md` |
+| `if (candidates.length === 0) { … } else { … }` | vault **读不到**（路径写错 / 目录改名）——保住全部已生成文章 |
+
+本轮 `candidates` 是 36（vault 读得到），所以走的是 `else` 分支，第一条守卫才是保 `_sample.md` 的那条。换过 `vaultPath` 之后第一次 `npm run sync`，务必确认日志里**没有** `[已跳过清理]`。
 **为什么必须对比前后两次 `ls`。** 这个脚本里有一段**会删文件**的清理逻辑：发布目录里不再出现的 slug，对应的副本会被 `fs.rm` 删掉。此刻 vault 里一篇都没标记，所以 `published` 是空的、`wanted` 是**空集合**——清理循环正好处于「把目录里所有 `.md` 都判为多余」的临界状态，**唯一挡住它的是那行 `if (f.startsWith('_')) continue;`**。
 
 - 只断言「已标记发布: 0 篇」**完全看不出这件事**：日志逐字一样，而 `_sample.md` 已经没了——T5/T6/T7/T8 的**全部夹具**都挂在它身上，后面的任务会在莫名其妙的报错里空转很久。
 - 这是本项目里**唯一一处破坏性操作**，跑之前先记快照是唯一能发现它的办法。
 - 若两次 `ls` 不同（尤其是少了 `_sample.md`），去查 `sync-vault.mjs` 清理循环里那行下划线守卫。
 
-若报 `vault 目录不存在`，检查 `blog.config.json` 里的 `vaultPath` 与磁盘上的实际路径是否逐字符一致。
+若输出 `[已跳过清理] vault 目录不存在或白名单目录全空`，检查 `blog.config.json` 里的 `vaultPath` 与磁盘上的实际路径是否逐字符一致。**这条提示必须存在**：没有它的话，这条路径上的失败是**完全静默**的——`listMarkdown` 只是 `catch { return; }`，而「一篇都没扫描到」和「一篇都没标记」在日志上长得几乎一样，前者却会让清理循环删光 `src/content/blog/` 下所有非下划线文件。
 
 - [ ] **Step 5: 验证脚本可重复执行（**这一步不验证幂等性**，见下）**
 
