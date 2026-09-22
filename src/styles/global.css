@@ -1,0 +1,49 @@
+/* 浅色为 :root 默认，深色由 html[data-theme="dark"] 覆盖。
+   实际初始主题由 BaseLayout 的内联脚本设置为 dark（见 Task 4）。 */
+:root {
+  --bg: #ffffff;
+  --card: #f6f8fa;
+  --bd: #d0d7de;
+  --tx: #1f2328;
+  --mu: #656d76;
+  --fa: #6e7781;
+  --ac: #0969da;
+  --chip: #f6f8fa;
+
+  --sans: system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+
+  --maxw: 720px;
+}
+
+html[data-theme="dark"] {
+  --bg: #0d1117;
+  --card: #161b22;
+  --bd: #30363d;
+  --tx: #e6edf3;
+  --mu: #8b949e;
+  --fa: #6e7681;
+  --ac: #58a6ff;
+  --chip: #21262d;
+}
+
+* { box-sizing: border-box; }
+
+html {
+  background: var(--bg);
+  color: var(--tx);
+  font-family: var(--sans);
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--tx);
+  transition: background .22s, color .22s;
+}
+
+a { color: var(--ac); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+::selection { background: var(--chip); }

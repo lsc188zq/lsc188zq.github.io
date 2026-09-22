@@ -1,0 +1,83 @@
+.prose {
+  font-size: 15px;
+  line-height: 1.85;   /* 中文行高需高于英文常用的 1.6 */
+  color: var(--tx);
+}
+
+.prose p { margin: 0 0 18px; }
+
+.prose h2 {
+  font-size: 21px;
+  font-weight: 600;
+  line-height: 1.45;
+  margin: 32px 0 14px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--bd);
+  scroll-margin-top: 80px;   /* 锚点跳转时不被头部遮挡 */
+}
+
+.prose h3 {
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.5;
+  margin: 24px 0 10px;
+  scroll-margin-top: 80px;
+}
+
+.prose h4 {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 20px 0 8px;
+  scroll-margin-top: 80px;
+}
+
+.prose ul, .prose ol { margin: 0 0 18px; padding-left: 24px; }
+.prose li { margin: 0 0 8px; }
+
+.prose blockquote {
+  border-left: 3px solid var(--ac);
+  background: var(--chip);
+  padding: 12px 16px;
+  margin: 0 0 20px;
+  font-size: 14px;
+  line-height: 1.8;
+  color: var(--mu);
+  border-radius: 0 6px 6px 0;
+}
+
+.prose blockquote p:last-child { margin-bottom: 0; }
+
+.prose img { max-width: 100%; height: auto; border-radius: 6px; }
+
+.prose table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0 0 20px;
+  font-size: 13.5px;
+}
+
+.prose th, .prose td {
+  border: 1px solid var(--bd);
+  padding: 8px 12px;
+  text-align: left;
+}
+
+.prose th { background: var(--chip); font-weight: 600; }
+
+.prose code {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  background: var(--chip);
+  border: 1px solid var(--bd);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.prose a { text-decoration: underline; text-underline-offset: 2px; }
+
+/* 块级公式横向溢出时可滚动，避免撑破布局 */
+.prose .katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 4px 0;
+}

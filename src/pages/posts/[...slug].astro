@@ -1,5 +1,7 @@
 ---
 import { getCollection, render } from 'astro:content';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import '../../styles/prose.css';
 
 export async function getStaticPaths() {
   const posts = await getCollection('blog');
@@ -7,19 +9,10 @@ export async function getStaticPaths() {
 }
 
 const { post } = Astro.props;
-const { Content, headings } = await render(post);
+const { Content } = await render(post);
 ---
-<!DOCTYPE html>
-<html lang="zh-CN">
-  <head>
-    <meta charset="utf-8" />
-    <title>{post.data.title}</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
-  </head>
-  <body>
-    <h1>{post.data.title}</h1>
-    <p>分类：{post.data.category} · 标签：{post.data.tags.join(', ')}</p>
-    <p>标题数：{headings.length}</p>
-    <article><Content /></article>
-  </body>
-</html>
+<BaseLayout title={post.data.title} description={post.data.description}>
+  <h1>{post.data.title}</h1>
+  <p>分类：{post.data.category} · 标签：{post.data.tags.join(', ')}</p>
+  <article class="prose"><Content /></article>
+</BaseLayout>

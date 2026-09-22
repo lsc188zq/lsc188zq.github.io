@@ -1,0 +1,54 @@
+---
+import Header from '../components/Header.astro';
+import '../styles/global.css';
+
+interface Props {
+  title: string;
+  description?: string;
+}
+
+const { title, description = '个人博客' } = Astro.props;
+---
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <!--
+      必须在 <head> 内联同步执行。放到外部文件或页面底部会导致浏览器
+      先按默认主题绘制一帧再切换，用户每次刷新都会看到闪白（FOUC）。
+    -->
+    <script is:inline>
+      (function () {
+        var t = 'dark';
+        // localStorage 在部分隐私设置/沙箱环境下读取会直接抛异常。
+        // 不兜住的话整个 IIFE 在 setAttribute 之前就中断了，
+        // 这些用户每次加载都落到 :root 的浅色 token 上——
+        // 与"初始主题固定为深色"的意图相反。
+        try {
+          t = localStorage.getItem('theme') || 'dark';
+        } catch (e) {}
+        document.documentElement.setAttribute('data-theme', t);
+      })();
+    </script>
+  </head>
+  <body>
+    <Header />
+    <main class="shell">
+      <slot />
+    </main>
+  </body>
+</html>
+
+<style>
+  .shell {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 26px;
+  }
+  @media (max-width: 600px) {
+    .shell { padding: 16px; }
+  }
+</style>

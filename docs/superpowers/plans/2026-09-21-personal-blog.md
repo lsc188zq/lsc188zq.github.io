@@ -26,11 +26,21 @@
 - **分类枚举固定为 6 个**：`知识`、`技术`、`项目`、`书单`、`游记`、`杂谈`。写错必须让构建失败。
 - **颜色令牌**：深色为主题默认值，**不跟随系统偏好**。
 - **正文禁用等宽字体**（中文无等宽字形，会 fallback 导致中英混排字形不统一）。等宽只用于代码块、日期、标签、logo。
-- **自有 JavaScript 总量上限约 60 行**（不含第三方的 Pagefind 与 giscus）。
+- **自有 JavaScript 总量上限 ~90 行 / 3 KB**（内联 + 打包，不含第三方的 Pagefind 与 giscus）。
+  - 设计文档第 10 节的「~60 行」是**动手前的估算**（深色模式 ~10、分类筛选 ~20、目录高亮 ~15、代码复制 ~15）。落地后有三处超出，且超出的部分都是**必须的**，不是膨胀：
+    - 深色模式 10 → ~26：多了 `localStorage` 异常兜底（读、写各一处）与 `aria-label` 随状态更新。
+    - 目录高亮 15 → ~18。
+    - 代码复制 15 → ~25：设计文档把「超长折叠」记为 0 行（`<details>` 是原生元素），但**折叠的判定与包裹仍然需要 JS**——Markdown 里作者写的是普通围栏代码块，构建产物里根本没有 `<details>`，得靠脚本数 `.line` 再包一层。
+  - **判据是体积不是行数**：自有 JS 超过 3 KB 才算失控，行数只作参考。这条是**对设计文档的已知偏离**，不是重新定义约束。
 - **`src/content/blog/` 是派生目录**，由同步脚本生成，**任何任务都不得手工编辑其中内容**。
+  - **唯一例外：`_sample.md` 是手工编写的测试夹具**（T2 创建、T7 追加一个长代码块）。它不是同步脚本产生的，因此不受上一条约束——**T7 的 Step 4 追加内容是允许的**，别把它当成违反约束。它在 **T11 被显式 `rm` 删除**，不会进入发布产物。除它之外，该目录下任何文件都不得手工编辑。
 - **绝不迁移 `简历/林尚灿.md`**：含手机号等个人信息。关于页由用户自行撰写。
 - **发布白名单目录**：`OI/算法`、`OI/游记`、`文集`、`项目/游戏/三眼枪`、`学习/深度学习`。其余目录一律不发布。
 - **命令不得接管道**：`cmd | tail` 会让退出码变成 `tail` 的退出码，掩盖失败。直接运行命令，需要截断时用重定向。
+- **每条验证都必须有判别力**：它要能真的失败。
+  - **负路径测试尤其危险。** 凡是「异常时应当……」「缺失时应当……」「没找到时应当……」这类断言，**必须带一个证明负路径确实被走到的标记**（计数器、打点、写回一个可读回的值），否则「兜底生效」和「根本没走到那条路」的输出会**逐字相同**，测试全绿而什么也没证明。
+  - 同理，**断言的落点要尽量靠近用户可见的结果**（计算样式、截图、构建产物的字节），而不是内部状态的痕迹（属性、类名、DOM 数量）——后者可以在用户什么都看不到的情况下全部通过。
+  - 本项目已经在这上面栽过三次：T5 的筛选探针会报假通过（`hidden` 属性被作者样式盖掉，卡片一张没少而探针全绿）、T4 的首帧探针**证不了**它名义上要证的 FOUC、T4 修复轮的「localStorage 抛异常」测试在注入根本没生效时照样全绿。
 - **提交信息用中文**，格式 `<type>: <描述>`。
 
 ---
@@ -616,9 +626,13 @@ a:hover { text-decoration: underline; }
 修改 `src/pages/posts/[...slug].astro`，在 **frontmatter** 中用 import 引入样式（不是 `<link>` 标签）：
 
 ```astro
-import '../styles/global.css';
-import '../styles/prose.css';
+import '../../styles/global.css';
+import '../../styles/prose.css';
 ```
+
+**注意是 `../../styles/`，不是 `../styles/`。** 本文件在 `src/pages/posts/`，比 `src/layouts/` 深一层，要退两级才到 `src/`。写成 `../styles/` 会解析到不存在的 `src/pages/styles/`，构建时 Vite 解析失败。
+
+（其余任务里出现的 `../styles/` 是正确的，不要一律改成 `../../`：`BaseLayout.astro` 和 `PostLayout.astro` 在 `src/layouts/`，`about.astro` 在 `src/pages/`，它们退一级就够。判断依据是**文件自身的层数**，不是抄哪一处。）
 
 **必须用 import，不能用 `<link href="/src/styles/...">`。** `src/` 下的文件由 Vite 处理，`<link>` 指向的原始路径在构建产物里不存在，生产环境下会 404 —— 而开发模式下可能看起来正常，是最容易蒙混过关的一类错误。
 
@@ -628,7 +642,7 @@ import '../styles/prose.css';
     <article class="prose"><Content /></article>
 ```
 
-- [ ] **Step 4: 构建并截图**
+- [ ] **Step 4: 构建并截图（浅色＝默认态）**
 
 ```bash
 npm run build
@@ -641,20 +655,24 @@ npm run preview
 另开终端：
 
 ```bash
-node scripts/shot.mjs "http://localhost:4321/posts/_sample" prose dark
-```
-
-预期：`.shots/prose-dark.png` 中正文为浅色文字、深色背景，标题 `##` 下方有分隔线。
-
-- [ ] **Step 5: 验证浅色主题令牌**
-
-临时把 `src/pages/posts/[...slug].astro` 的 `<html>` 标签改为 `<html lang="zh-CN" data-theme="light">`，重新构建并截图：
-
-```bash
 node scripts/shot.mjs "http://localhost:4321/posts/_sample" prose light
 ```
 
-预期：`.shots/prose-light.png` 为浅色背景深色文字。**确认后把 `data-theme="light"` 删掉**（Task 4 会用脚本动态设置）。
+预期：`.shots/prose-light.png` 为浅色背景深色文字，标题 `##` 下方有分隔线。
+
+**注意：`shot.mjs` 的第三个参数（`light`/`dark`）在本任务中不生效。** 它的机制是写 `localStorage` 后刷新页面，而读这个值的脚本要到 **Task 4** 才存在。此刻 `<html>` 上没有 `data-theme` 属性，页面一律走 `:root` 的浅色令牌——**传 `dark` 也只会得到浅色图**。这里传 `light` 只为让截图文件名与内容相符。
+
+- [ ] **Step 5: 验证深色主题令牌**
+
+临时把 `src/pages/posts/[...slug].astro` 的 `<html>` 标签改为 `<html lang="zh-CN" data-theme="dark">`（这是本阶段唯一能真正触发深色令牌的手段），重新构建并截图：
+
+```bash
+node scripts/shot.mjs "http://localhost:4321/posts/_sample" prose dark
+```
+
+预期：`.shots/prose-dark.png` 为深色背景浅色文字，且背景应是 `#0d1117` 而非纯黑。**关键交叉检查：这张图必须与 Step 4 的浅色图明显不同。** 两图若一模一样，说明 `html[data-theme="dark"]` 那段令牌没生效，先修好再继续。
+
+**确认后必须把 `data-theme="dark"` 删掉**（Task 4 会用脚本动态设置）。忘了删的后果不只是"多一个属性"——全站会被钉死在深色，而且 Task 4 做主题切换时会看起来"不生效"，届时很难定位。
 
 - [ ] **Step 6: 提交**
 
@@ -680,7 +698,7 @@ git commit -m "feat: 设计令牌与正文排版样式"
 创建 `src/components/ThemeToggle.astro`：
 
 ```astro
-<button id="theme-toggle" class="theme-toggle" type="button" aria-label="切换主题">☀</button>
+<button id="theme-toggle" class="theme-toggle" type="button" aria-label="切换到浅色">☀</button>
 
 <style>
   .theme-toggle {
@@ -703,13 +721,24 @@ git commit -m "feat: 设计令牌与正文排版样式"
 
   function sync() {
     const dark = document.documentElement.getAttribute('data-theme') === 'dark';
-    if (btn) btn.textContent = dark ? '☀' : '☾';
+    if (btn) {
+      btn.textContent = dark ? '☀' : '☾';
+      // aria-label 必须跟着状态走。只写死一个"切换主题"的话，
+      // 屏幕阅读器用户永远只知道"这里有个按钮"，不知道当前是什么主题、
+      // 按下去会变成什么——而视力正常的用户看得见 ☀/☾ 的切换。
+      btn.setAttribute('aria-label', dark ? '切换到浅色' : '切换到深色');
+    }
   }
 
   btn?.addEventListener('click', () => {
     const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
     document.documentElement.setAttribute('data-theme', next);
-    localStorage.setItem(KEY, next);
+    // localStorage 在部分隐私设置/沙箱环境下写入也会抛异常。
+    // 不兜住的话，主题在视觉上已经切了，但 sync() 永远执行不到，
+    // 图标和 aria-label 会停在旧状态。
+    try {
+      localStorage.setItem(KEY, next);
+    } catch (e) {}
     sync();
   });
 
@@ -797,7 +826,14 @@ const { title, description = '个人博客' } = Astro.props;
     -->
     <script is:inline>
       (function () {
-        var t = localStorage.getItem('theme') || 'dark';
+        var t = 'dark';
+        // localStorage 在部分隐私设置/沙箱环境下读取会直接抛异常。
+        // 不兜住的话整个 IIFE 在 setAttribute 之前就中断了，
+        // 这些用户每次加载都落到 :root 的浅色 token 上——
+        // 与"初始主题固定为深色"的意图相反。
+        try {
+          t = localStorage.getItem('theme') || 'dark';
+        } catch (e) {}
         document.documentElement.setAttribute('data-theme', t);
       })();
     </script>
@@ -882,6 +918,10 @@ node -e "import('playwright-core').then(async({chromium})=>{const b=await chromi
 ```
 
 预期：输出 `首帧背景: rgb(13, 17, 23)`。若是 `rgb(255, 255, 255)`，说明内联脚本没生效或位置不对。
+
+**这条探针只能证明一半，别把它当 FOUC 的证明。** `page.goto` 默认等到 `load` 事件才返回，而 `<script type="module">`（Astro 对**非** `is:inline` 的脚本的默认处理）是 defer 的，同样在 `load` 之前就跑完了。也就是说：**有人把 `is:inline` 去掉、或者把脚本挪到 `<body>` 末尾，这条探针照样打印 `rgb(13,17,23)`。** 它能证明的只是"深色是默认值、没读 `prefers-color-scheme`"，证明不了"脚本是同步内联在 `<head>` 里的"。
+
+真正能证明 FOUC 性质的是**构建产物**：`dist/` 里该页面的 `<head>` 内应当有一个**无 `src`、无 `type="module"`** 的 `<script>`，且在 `<body>` 之前。这条是权威判据，探针是辅助。
 
 - [ ] **Step 7: 提交**
 
@@ -968,6 +1008,14 @@ const iso = date.toISOString().slice(0, 10);
     border-radius: 4px;
   }
   .card-cat:hover { color: var(--tx); text-decoration: none; }
+  /*
+    hidden 属性靠 UA 样式表的 [hidden]{display:none} 生效，而 UA 规则属于
+    "呈现性提示"，优先级低于作者样式——上面的 .card{display:grid} 会把它盖掉。
+    结果是卡片属性设上了 hidden、DOM 查询也数得对，但**画面上一张都没少**。
+    .card[hidden] 特异性(0,2,0)高于 .card(0,1,0)，这一条必须留着。
+    已实测确认：少了它，getComputedStyle(el).display 仍返回 "grid"。
+  */
+  .card[hidden] { display: none; }
   @media (max-width: 600px) {
     .card { grid-template-columns: 1fr; gap: 6px; }
   }
@@ -1099,10 +1147,14 @@ node scripts/shot.mjs "http://localhost:4321/" home dark
 - [ ] **Step 5: 验证筛选真的生效**
 
 ```bash
-node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage();await p.goto('http://localhost:4321/');await p.click('.cf-btn[data-cat=\"知识\"]');await p.waitForTimeout(200);const vis=await p.\$\$eval('.card:not([hidden])',n=>n.length);const st=await p.textContent('#list-status');console.log('可见卡片:',vis,'| 状态行:',st);await p.screenshot({path:'.shots/home-filtered.png',fullPage:true});await b.close();})"
+node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage();await p.goto('http://localhost:4321/');await p.click('.cf-btn[data-cat=\"知识\"]');await p.waitForTimeout(200);const vis=await p.\$\$eval('.card',ns=>ns.filter(n=>getComputedStyle(n).display!=='none').length);const st=await p.textContent('#list-status');console.log('可见卡片:',vis,'| 状态行:',st);await p.screenshot({path:'.shots/home-filtered.png',fullPage:true});await b.close();})"
 ```
 
-预期：`可见卡片: 1 | 状态行: 知识 · 1 篇`。若可见数为 0，检查 `PostCard` 的 `data-category` 是否与 `CATEGORIES` 里的字符串完全一致（含中文，不能有空格差异）。
+预期：`可见卡片: 1 | 状态行: 知识 · 1 篇`。
+
+**探针为什么数的是"计算样式"而不是 `:not([hidden])`**：`hidden` 属性的 `display:none` 来自 UA 样式表，属"呈现性提示"，优先级低于作者样式。`PostCard` 里的 `.card{display:grid}` 会把它盖掉——属性设上了、`:not([hidden])` 也数得对，**但卡片一张都没从画面上消失**。已实测确认。用 `getComputedStyle(...)!=='none'` 数，才是"用户真的看得见几张"。所以 `PostCard` 里那条 `.card[hidden]{display:none}` 是功能的一部分，不是可选的样式糖。
+
+**并且必须目视确认 `.shots/home-filtered.png` 里只剩 1 张卡片。** 这条不能只靠 DOM 探针——上面那个假通过的坑，探针本身就是帮凶。若可见数为 0，检查 `PostCard` 的 `data-category` 是否与 `CATEGORIES` 里的字符串完全一致（含中文，不能有空格差异）。
 
 - [ ] **Step 6: 提交**
 
@@ -1361,22 +1413,24 @@ const { Content, headings } = await render(post);
 import katexCss from 'katex/dist/katex.min.css?url';
 ```
 
-在 `<BaseLayout>` 标签内、`<div class="post-grid">` 之前加入：
+**判定条件：检查原始正文里有没有 `$` 公式标记。** 不要用 `headings` 判断——公式绝大多数在正文里而不在标题里，用标题判断会漏掉几乎所有文章，而且 `post` 上**不存在** `hasMath` 这个字段。
 
-```astro
-{headings.some((h) => h.text.includes('$')) || post.hasMath ? <link rel="stylesheet" href={katexCss} /> : null}
-```
-
-> **这一步的判定条件需要修正。** 用 `headings` 判断不可靠（公式大多在正文不在标题里）。改为：在 `PostLayout.astro` frontmatter 里直接检查原始正文是否含公式标记：
+在 `PostLayout.astro` 的 frontmatter 里加：
 
 ```js
 const body = post.body ?? '';
-// 去掉代码块后再判断，避免代码里的 $ 造成误判
+// 先去掉代码块，避免代码里的 $ 造成误判（样例里就有一段含 $100 和 $sum$ 的 C++）
 const bodyNoCode = body.replace(/```[\s\S]*?```/g, '');
 const hasMath = /\$[^$\n]+\$|\$\$[\s\S]+?\$\$/.test(bodyNoCode);
 ```
 
-然后把上面的条件替换为 `{hasMath && <link rel="stylesheet" href={katexCss} />}`。
+然后在 `<BaseLayout>` 标签内、`<div class="post-grid">` 之前加入：
+
+```astro
+{hasMath && <link rel="stylesheet" href={katexCss} />}
+```
+
+（`<link rel="stylesheet">` 在 `<body>` 内是合法的——`stylesheet` 属于 HTML 规范里的 "body-ok" link 类型，浏览器会正常加载。）
 
 - [ ] **Step 5: 构建并验证**
 
@@ -1398,9 +1452,11 @@ node scripts/shot.mjs "http://localhost:4321/posts/_sample" post dark
 
 1. 标题下方显示 `2026-01-01`、`知识`、`约 N 分钟`
 2. 标签是 `#测试` `#公式`
-3. **右侧有目录**，列出「行内公式」「块级公式」「代码块里的危险字符」「标题层级」「三级标题」「四级标题」等
+3. **右侧有目录**，列出 6 项：「行内公式」「块级公式」「代码块里的危险字符」「标题层级」「三级标题」「另一个三级标题」。**「四级标题」不应该出现**——目录组件只收录 `depth === 2` 和 `depth === 3`（`TableOfContents` 里的过滤条件）。若你看到 7 项含四级标题，说明过滤没生效；若少了几项，说明 `headings` 没拿到
 4. 公式渲染为数学符号（KaTeX 样式已加载）
 5. 「行内公式」「块级公式」等标题在目录里可点击
+
+**本任务验证不到的一项：上一页/下一页。** 此时全库只有 `_sample.md` 一篇文章，`prev` 和 `next` 都是 `undefined`，`.pn` 那一段根本不会渲染。这是**预期**，不是缺陷。上下篇要等 **Task 11** 迁移完 36 篇才有内容可验——已记入台账，届时补验（含首篇无「上一篇」、末篇无「下一篇」两个边界）。
 
 - [ ] **Step 6: 验证目录滚动高亮**
 
@@ -1416,7 +1472,11 @@ node -e "import('playwright-core').then(async({chromium})=>{const b=await chromi
 node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage();await p.goto('http://localhost:4321/posts/_sample');const has=await p.\$\$eval('link[href*=katex]',n=>n.length);const cls=await p.\$\$eval('.katex',n=>n.length);console.log('katex样式链接:',has,'| .katex元素:',cls);await b.close();})"
 ```
 
-预期：`katex样式链接: 1 | .katex元素: 4`（样例里有 4 个公式）。
+预期：`katex样式链接: 1 | .katex元素: 2`。
+
+**为什么是 2 不是 4**：样例里虽然有 4 种公式写法，但 `remark-math` 只认 `$` 定界符——`$O(n \log n)$` 和 `$$...$$` 会渲染（各产生 1 个 `.katex`），而 `\(...\)` 和 `\[...\]` 原样显示为文本、**不产生 `.katex` 元素**。这与 Task 2 的裁决（Ruling 6）是同一件事。看到 2 是正确的；看到 4 反而说明管线以某种方式渲染了它不该认的定界符。
+
+顺带：这条预期**不能**用「公式有没有显示出来」来判断，因为只有 2 个会显示——这正是这个数字的意义。Task 10 完成后，`\(...\)` / `\[...\]` 会由同步脚本归一成 `$` 形式，届时（在真实文章上）应变成 4。
 
 - [ ] **Step 8: 提交**
 
@@ -1687,7 +1747,17 @@ node scripts/shot.mjs "http://localhost:4321/posts/_sample" code light
 
 预期：两张图中代码块左侧都有**灰色行号**，且**语法高亮颜色明显不同**（深色是 github-dark 配色，浅色是 github-light）。若两图颜色相同，说明 `defaultColor: false` 没生效或 `prose.css` 里那段 `--shiki-*` 规则写错了。
 
-- [ ] **Step 7: 提交**
+- [ ] **Step 7: 验证复制按钮（本任务此前唯一没有验证的交付物）**
+
+```bash
+node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage();await p.addInitScript(()=>{window.__copied=null;if(navigator.clipboard)navigator.clipboard.writeText=async t=>{window.__copied=t;};});await p.goto('http://localhost:4321/posts/_sample');const n=await p.\$\$eval('.copy-btn',x=>x.length);await p.locator('.copy-btn').first().click();await p.waitForTimeout(150);const r=await p.evaluate(()=>({copied:window.__copied,label:document.querySelector('.copy-btn').textContent}));console.log('复制按钮数:',n,'| 按钮文字:',r.label,'| 复制到字符数:',r.copied?r.copied.length:null);console.log('首行:',JSON.stringify((r.copied||'').split(String.fromCharCode(10))[0]));console.log('首行是否以数字开头(即混进了行号):',/^(\\s*)\\d/.test(r.copied||''));await b.close();})"
+```
+
+预期：`复制按钮数: 2`（两个代码块各一个）｜`按钮文字: 已复制`｜`复制到字符数` 大于 0｜`首行` 是 `"#include <bits/stdc++.h>"`｜`首行是否以数字开头(即混进了行号): false`。
+
+**为什么这条不能省。** 行号是纯 CSS 计数器（`content: counter(line)`）生成的，**不是 DOM 文本**，所以 `code.textContent` 天然不含行号——但这恰恰是最容易被后人改坏的地方：哪天有人把行号改成真实的 DOM 元素，复制出来的每一行前面就会多一个数字，**而这种回归在截图里完全看不出来**（截图里两者长得一模一样）。这条探针一次验证三件事：按钮存在、点击真的调用了剪贴板、复制内容不含行号。
+
+- [ ] **Step 8: 提交**
 
 ```bash
 git add -A
@@ -1779,13 +1849,24 @@ import PostCard from '../../components/PostCard.astro';
 
 export async function getStaticPaths() {
   const posts = await getCollection('blog', ({ data }) => !data.draft);
-  const tags = [...new Set(posts.flatMap((p) => p.data.tags))];
-  return tags.map((tag) => ({ params: { tag } }));
+  // 这个路由同时服务于「标签」和「分类」两类链接。
+  //
+  // 首页卡片的分类芯片（PostCard 里的 .card-cat）指向 /tags/<分类名>，
+  // 但 category 和 tags 是 schema 里两个互不相干的字段——只收 tags 的话，
+  // **每一张卡片上的分类芯片都会 404**，而且 T13 之前还没有 404 页面兜着。
+  // 所以这里取两者的并集。
+  const names = [...new Set(posts.flatMap((p) => [...p.data.tags, p.data.category]))];
+  return names.map((tag) => ({ params: { tag } }));
 }
 
 const { tag } = Astro.params;
+// 同理，命中条件是「是标签」或「是分类」。两者同名时并集已去重，不会重复渲染。
+//
+// 注：Astro.params.tag 在类型上是 string | undefined。这里不需要处理 undefined
+// ——getStaticPaths 生成的每个路径都带 tag。编辑器里的 TS 报错就是它，
+// npm run build 不跑类型检查，不会因此失败。
 const posts = (await getCollection('blog', ({ data }) => !data.draft))
-  .filter((p) => p.data.tags.includes(tag))
+  .filter((p) => p.data.tags.includes(tag) || p.data.category === tag)
   .sort((a, b) => b.data.date.getTime() - a.data.date.getTime());
 ---
 <BaseLayout title={`#${tag}`}>
@@ -1827,12 +1908,31 @@ npm run preview
 
 ```bash
 node scripts/shot.mjs "http://localhost:4321/tags" tags dark
-node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage();await p.goto('http://localhost:4321/tags');const href=await p.getAttribute('.cloud-item','href');console.log('标签链接:',href);await p.click('.cloud-item');await p.waitForTimeout(300);console.log('跳转后标题:',await p.textContent('.page-title'));await b.close();})"
 ```
 
-预期：链接形如 `/tags/%E6%B5%8B%E8%AF%95`（浏览器地址栏会显示成中文），点击后页面标题为 `#测试`。
+```bash
+node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage();await p.goto('http://localhost:4321/tags');const items=await p.\$\$eval('.cloud-item',ns=>ns.map(n=>({href:n.getAttribute('href'),name:n.querySelector('.cloud-name').textContent})));console.log('标签数:',items.length);for(const i of items)console.log('  ',i.name,'->',i.href);console.log('出现双重编码(%25):',items.some(i=>i.href.includes('%25')));await p.click('.cloud-item');await p.waitForTimeout(300);console.log('跳转后 URL:',p.url());console.log('跳转后标题:',await p.textContent('.page-title'));console.log('标题与第一个标签一致:',(await p.textContent('.page-title'))===items[0].name);await b.close();})"
+```
 
-- [ ] **Step 4: 提交**
+预期：`标签数: 2`；两个 `href` 都是**单次百分号编码**（形如 `/tags/%E6%B5%8B%E8%AF%95`）；`出现双重编码(%25): false`；`标题与第一个标签一致: true`。
+
+**为什么不写死「第一个一定是 `#测试`」**：标签云按「出现次数倒序、同次数按 `localeCompare(zh)`」排。样例的两个标签都是 1 篇，谁在前**取决于 Node 的 ICU 中文排序**（按拼音 测 cè 在 公 gōng 之前）——这条依赖是真的，但它不是本任务要验的东西，写死了会变成一个和 ICU 版本绑定的脆断言。真正要验的是**「没有被双重编码」**（`%25` 不出现）和**「点进去的标题和点的那一项对得上」**，这两条与排序无关。
+
+- [ ] **Step 4: 验证分类芯片不会 404（本任务修的就是这个）**
+
+首页每张卡片的分类芯片都指向 `/tags/<分类名>`，而分类是**另一个字段**。若 `getStaticPaths` 只收标签，这些链接**全部 404**——T13 之前连 404 页面都没有。
+
+```bash
+node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage();await p.goto('http://localhost:4321/');const href=await p.getAttribute('.card-cat','href');console.log('分类芯片链接:',href);const r=await p.goto('http://localhost:4321'+href);console.log('状态码:',r.status());console.log('页面标题:',await p.textContent('.page-title'));await b.close();})"
+```
+
+预期：`分类芯片链接: /tags/%E7%9F%A5%E8%AF%86`（即 `知识`）；`状态码: 200`（**不是 404**）；`页面标题: #知识`。
+
+**若状态码是 404**，就是 `getStaticPaths` 里没并入 `p.data.category`——这正是本步要拦的回归。
+
+（**服务端解码这条已经排除掉了，不用怀疑它。** 控制器实测过：把 `dist/tags/知识/index.html` 放进去后用 `astro preview` 请求，`/tags/%E7%9F%A5%E8%AF%86`、`/tags/%E7%9F%A5%E8%AF%86/`、`/tags/知识` 三种写法**都返回 200**。所以这里的 404 只可能是页面没被生成。）
+
+- [ ] **Step 5: 提交**
 
 ```bash
 git add -A
@@ -3115,21 +3215,25 @@ node -e "import('playwright-core').then(async({chromium})=>{const b=await chromi
 
 确认卡片变成单列、导航不溢出。
 
-**核对 JavaScript 预算**（设计文档第 10 节要求自有 JS ≤ ~60 行）：
+**核对 JavaScript 预算**（全局约束：自有 JS ≤ ~90 行 / 3 KB，**不含 `pagefind/`**）。
+
+这条必须**同时**跨过内联与打包两类脚本。注意「只数内联脚本」是测不出预算的——自家的主题切换、分类筛选、目录高亮、代码复制/折叠**全部是打包后的外部 `.js`**，页面上唯一的内联脚本只有 `<head>` 里那个 FOUC IIFE。所以下面这条命令按**文件**列出并累加：
 
 ```bash
-node -e "import('fs').then(async fs=>{const p='dist';const out=[];async function walk(d){for(const e of await fs.readdirSync(d,{withFileTypes:true})){const f=d+'/'+e.name;if(e.isDirectory())await walk(f);else if(e.name.endsWith('.js'))out.push([f,fs.statSync(f).size]);}}await walk(p);out.sort((a,b)=>b[1]-a[1]);for(const[f,s]of out)console.log((s/1024).toFixed(1).padStart(8)+' KB  '+f);})"
+node -e "import('fs').then(async fs=>{const out=[];async function walk(d){for(const e of await fs.readdirSync(d,{withFileTypes:true})){const f=d+'/'+e.name;if(e.isDirectory())await walk(f);else if(e.name.endsWith('.js')&&!f.includes('pagefind')){const s=fs.readFileSync(f,'utf8');out.push([f,s.split('\n').filter(l=>l.trim()).length,fs.statSync(f).size]);}}}await walk('dist');out.sort((a,b)=>b[2]-a[2]);let L=0,B=0;for(const[f,l,b]of out){L+=l;B+=b;console.log(String(l).padStart(5)+' 行 '+String((b/1024).toFixed(1)).padStart(7)+' KB  '+f);}console.log('-----');console.log('自有 JS 合计: '+L+' 行 / '+(B/1024).toFixed(1)+' KB');})"
 ```
 
-预期：体积最大的应该是 `pagefind/` 下的文件（第三方，不计入预算）。**不应出现体积异常的自家脚本**。若某天发现自己写的 JS 超过 3KB，说明有逻辑失控了——本项目的自有脚本只有主题切换、分类筛选、目录高亮、代码复制四件事。
+预期：合计 **≤ 90 行 / ≤ 3 KB**。**判据是体积**——超过 3 KB 才算失控；行数只作参考。
 
-也可以用下面的命令直接确认页面内联脚本的行数：
+若列表里出现了**你不认识的文件**（例如某个 Astro 注入的 runtime chunk），**原样报上来，不要自行归类为"第三方、不计入"**——那正是这条检理想的漏掉的东西。
+
+再单独确认一次内联脚本（只为证明 FOUC 脚本确实是内联的，不是拿来当预算的）：
 
 ```bash
 node -e "import('fs').then(fs=>{const h=fs.readFileSync('dist/index.html','utf8');const m=[...h.matchAll(/<script(?![^>]*src)[^>]*>([\s\S]*?)<\/script>/g)];let n=0;for(const x of m)n+=x[1].split('\n').filter(l=>l.trim()).length;console.log('首页内联脚本行数:',n);})"
 ```
 
-预期：个位数到二十几行之间。
+预期：**个位数**（只有 FOUC 那个 IIFE，约 8 行）。若这里冒出二十几行，说明有脚本没被打包而是内联进了页面——那要查清楚，别当好事。
 
 - [ ] **Step 6: 提交**
 
