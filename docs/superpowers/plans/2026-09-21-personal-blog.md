@@ -1146,26 +1146,39 @@ node scripts/shot.mjs "http://localhost:4321/" home dark
 
 - [ ] **Step 5: 验证筛选真的生效**
 
-**点一个当前 0 篇的分类**（不要点「知识」）：
+**点三个分类，三种状态都要看**：
 
 ```bash
-node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage();await p.goto('http://localhost:4321/');const vis=async()=>await p.\$\$eval('.card',ns=>ns.filter(n=>getComputedStyle(n).display!=='none').length);const st=async()=>await p.textContent('#list-status');await p.click('.cf-btn[data-cat=\"技术\"]');await p.waitForTimeout(200);console.log('技术(0篇) ->','可见卡片:',await vis(),'| 状态行:',await st());await p.screenshot({path:'.shots/home-filtered-empty.png',fullPage:true});await p.click('.cf-btn[data-cat=\"__all__\"]');await p.waitForTimeout(200);console.log('全部 ->','可见卡片:',await vis(),'| 状态行:',await st());await p.screenshot({path:'.shots/home-filtered.png',fullPage:true});await b.close();})"
+node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage();await p.goto('http://localhost:4321/');const vis=async()=>await p.\$\$eval('.card',ns=>ns.filter(n=>getComputedStyle(n).display!=='none').length);const st=async()=>await p.textContent('#list-status');console.log('卡片上的 data-category:',JSON.stringify(await p.\$\$eval('.card',ns=>ns.map(n=>n.dataset.category))));const click=async c=>{await p.click('.cf-btn[data-cat=\"'+c+'\"]');await p.waitForTimeout(200);console.log(c,'-> 可见卡片:',await vis(),'| 状态行:',await st());};await click('知识');await p.screenshot({path:'.shots/home-filtered.png',fullPage:true});await click('技术');await p.screenshot({path:'.shots/home-filtered-empty.png',fullPage:true});await click('__all__');await b.close();})"
 ```
 
 预期：
 
 ```
-技术(0篇) -> 可见卡片: 0 | 状态行: 技术 · 0 篇
-全部      -> 可见卡片: 1 | 状态行: 共 1 篇
+卡片上的 data-category: ["知识"]
+知识     -> 可见卡片: 1 | 状态行: 知识 · 1 篇
+技术     -> 可见卡片: 0 | 状态行: 技术 · 0 篇
+__all__  -> 可见卡片: 1 | 状态行: 共 1 篇
 ```
 
-**为什么必须点「技术」而不是点「知识」**：全库此刻唯一的文章就是「知识」分类。点「知识」得到 `可见卡片: 1`，而这个输出**同时**对应三种情况——① 筛选正常工作；② 筛选压根没跑；③ `.card[hidden]` 没生效、但 `hidden` 属性设上了。**它排不掉它本该防的那两种坏法，等于没测。** 只有让可见数真的**归零**，才同时证明了「筛选跑了」**且**「隐藏真的在画面上生效」；再点回「全部」把数恢复到 1，排掉「把卡片全藏了」这种过度隐藏。
+**四条输出各自在守什么——少一条就有一个坏法能全绿溜过去**：
+
+| 输出 | 它排掉的坏法 |
+|---|---|
+| `data-category: ["知识"]` | 卡片属性与 `CATEGORIES` 里的字符串对不上（**尾随空格、全半角括号**）。这是本项目明令警惕的坑，而它**打印出来**才看得见 |
+| `知识 -> 1` | 分类**匹配逻辑**坏了（比如恒不相等）——点有文章的分类却一篇都出不来 |
+| `技术 -> 0` | **隐藏没有真的生效**：`hidden` 属性设上了、DOM 查询数得对，但 `.card{display:grid}` 盖住了 UA 规则，**画面上卡片一张没少**（Ruling 9 那个假通过） |
+| `__all__ -> 1` | **过度隐藏**：筛选一跑就把卡片全藏了、点「全部」也回不来 |
+
+**这四条不是凑数，是两次实战补出来的。** 最初只点「知识」——但全库此刻唯一的文章**就是**「知识」，`可见卡片: 1` 同时对应「匹配正常」「筛选压根没跑」「隐藏没生效」，**它排不掉它本该防的坏法**。改成只点「技术」后，`知识 -> 1` 那条又被丢了：**评审者用变异测试证明**，把产物里的 `data-category="知识"` 改成 `"知识 "`（一个尾随空格），探针 6/6 全绿、退出码 0，而同一份产物里点「知识」得到 `可见卡片: 0`——**全库唯一的文章在任何分类下都不可达**。所以四条一起写，缺一不可。
 
 （**这是本项目第四次栽在同一件事上**：探针的输出在坏掉时和好着时一模一样。前三次是 T5 的 `:not([hidden])` 计数、T4 的首帧探针、T4 的异常注入测试。已提为全局约束。）
 
 **探针为什么数的是"计算样式"而不是 `:not([hidden])` 的个数**：`hidden` 属性的 `display:none` 来自 UA 样式表，属"呈现性提示"，优先级低于作者样式。`PostCard` 里的 `.card{display:grid}` 会把它盖掉——属性设上了、`:not([hidden])` 也数得对，**但卡片一张都没从画面上消失**。已实测确认。用 `getComputedStyle(...)!=='none'` 数，才是"用户真的看得见几张"。所以 `PostCard` 里那条 `.card[hidden]{display:none}` 是功能的一部分，不是可选的样式糖。
 
-**并且必须目视确认这两张截图**：`home-filtered-empty.png` 里**卡片区一张不剩**（连分隔线都不该有），`home-filtered.png` 里**只剩 1 张**。这条不能只靠 DOM 探针——上面那个假通过的坑，探针本身就是帮凶。若「技术」的可见数不是 0，先检查 `PostCard` 的 `data-category` 是否与 `CATEGORIES` 里的字符串完全一致（含中文，不能有空格差异）。
+**并且必须目视确认这两张截图**：`home-filtered-empty.png` 里**卡片区一张不剩**（连分隔线都不该有），`home-filtered.png` 里**只剩 1 张**。这条不能只靠 DOM 探针——上面那个假通过的坑，探针本身就是帮凶。
+
+**出问题时先看哪一行（这里曾经写反过，评审者指出来了）**：若 `知识 -> 可见卡片: 1` 不成立，**第一嫌疑**是 `PostCard` 的 `data-category` 与 `CATEGORIES` 里的字符串对不上（中文，多一个空格、用了全角括号都会对不上）。**不要去看「技术」那一行**——`data-category` 拼错时，「技术」的可见数**恰好也是 0**，它碰巧通过，**看上去一切正常**。判断依据是探针第一行打印的 `卡片上的 data-category:`，它直接把实际字符串摊开；`知识 -> 1` 是这条链路的**功能性**断言，两者一起才关得住。
 
 - [ ] **Step 6: 提交**
 
