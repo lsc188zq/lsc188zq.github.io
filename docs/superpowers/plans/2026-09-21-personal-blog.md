@@ -1146,7 +1146,6 @@ node scripts/shot.mjs "http://localhost:4321/" home dark
 
 - [ ] **Step 5: 验证筛选真的生效**
 
-```bash
 **点一个当前 0 篇的分类**（不要点「知识」）：
 
 ```bash
