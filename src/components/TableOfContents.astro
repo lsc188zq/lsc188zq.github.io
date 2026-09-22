@@ -1,0 +1,75 @@
+---
+interface Heading {
+  depth: number;
+  slug: string;
+  text: string;
+}
+
+interface Props {
+  headings: Heading[];
+}
+
+const { headings } = Astro.props;
+// 只收录 h2 / h3，避免目录过长
+const toc = headings.filter((h) => h.depth === 2 || h.depth === 3);
+---
+{toc.length > 0 && (
+  <aside class="toc" id="toc">
+    <div class="toc-title">本页目录</div>
+    {toc.map((h) => (
+      <a class:list={['toc-link', { 'toc-h3': h.depth === 3 }]} data-target={h.slug} href={`#${h.slug}`}>{h.text}</a>
+    ))}
+  </aside>
+)}
+
+<style>
+  .toc {
+    position: sticky;
+    top: 24px;
+    align-self: start;
+    max-height: calc(100vh - 48px);
+    overflow-y: auto;
+    padding-top: 6px;
+  }
+  .toc-title {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: .12em;
+    color: var(--fa);
+    margin-bottom: 12px;
+    text-transform: uppercase;
+  }
+  .toc-link {
+    display: block;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--mu);
+    padding: 4px 0 4px 10px;
+    border-left: 2px solid var(--bd);
+    transition: color .15s, border-color .15s;
+  }
+  .toc-link:hover { color: var(--tx); text-decoration: none; }
+  .toc-link.on { color: var(--ac); border-color: var(--ac); font-weight: 600; }
+  .toc-h3 { padding-left: 22px; }
+  @media (max-width: 900px) { .toc { display: none; } }
+</style>
+
+<script>
+  const links = Array.from(document.querySelectorAll('.toc-link'));
+  const targets = links
+    .map((l) => document.getElementById(l.dataset.target))
+    .filter((el) => el !== null);
+
+  if (targets.length) {
+    const obs = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) {
+          if (!e.isIntersecting) continue;
+          links.forEach((l) => l.classList.toggle('on', l.dataset.target === e.target.id));
+        }
+      },
+      { rootMargin: '0px 0px -70% 0px', threshold: 0 }
+    );
+    targets.forEach((t) => obs.observe(t));
+  }
+</script>
