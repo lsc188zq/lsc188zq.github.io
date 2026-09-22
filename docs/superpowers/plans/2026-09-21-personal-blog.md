@@ -1285,7 +1285,12 @@ const toc = headings.filter((h) => h.depth === 2 || h.depth === 3);
 
   const sync = () => {
     const y = scrollY + innerHeight * LINE;
-    const atBottom = scrollY + innerHeight >= document.documentElement.scrollHeight - 2;
+    // 「滚到底」必须**同时**满足「还能滚」和「确实滚到了底」。
+    // 只写 scrollY + innerHeight >= scrollHeight - 2 的话，当文章总高不超过视口时
+    // 它**恒为真**——读者明明在一篇短随笔的顶部，目录却点亮最后一节，
+    // 与他实际所在的位置不符。这和上面那条"末尾够不到参考线"是同一类缺陷，只是方向相反。
+    const maxScroll = document.documentElement.scrollHeight - innerHeight;
+    const atBottom = maxScroll > 0 && scrollY >= maxScroll - 2;
     // 滚到底时，末尾几节的标题因为**无处可滚**，永远到不了参考线——没有这一条，
     // 目录里最后几节永远高亮不了，点它们的链接也毫无反应。
     // 已实测：点「另一个三级标题」跳到底部后，原实现的高亮项是空数组。
@@ -1533,6 +1538,22 @@ node -e "import('playwright-core').then(async({chromium})=>{const b=await chromi
   （注：T4 版布局量到的是 1120 / 720。本任务的两栏网格把正文列压窄了，行数变多，所以页面变高。**别照着 1120 去核对**。）
 - **先打印 `能滚动`**。若它输出 `false`，说明这条验证此刻**无意义**，要在报告里如实写"页面不够长，滚动高亮未能验证"，**不要当成通过**。
 - **必须是「直接跳到底」而不是「阶梯滚到底」**。这不是省事，是**这条探针唯一有判别力的写法**：原实现（IntersectionObserver + 顶部 30% 观察带）在**阶梯滚动时表现是对的**，只有**直接跳到底**才会暴露"最后三节永远进不了观察带"这个缺陷（实测：阶梯滚到底高亮 `代码块里的危险字符`，直接跳到底高亮 `[]`）。改成阶梯滚动会让这条探针**变绿而缺陷仍在**——本项目第七次遇到「探针在坏掉时和好着时输出一样」。判断依据仍然是那句话：**把坏法注进去，它会红吗？** 这里"坏法"就是原实现，答案是「只有直接跳才会红」。
+
+**再补一条：视口比页面还高时，不能点亮最后一项。**
+
+```bash
+node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage({viewport:{width:1100,height:1300}});await p.goto('http://localhost:4321/posts/_sample');const h=await p.evaluate(()=>Math.max(document.body.scrollHeight,document.documentElement.scrollHeight));const all=await p.\$\$eval('.toc-link',n=>n.map(x=>x.textContent));const on=await p.\$\$eval('.toc-link.on',n=>n.map(x=>x.textContent));console.log('页面高:',h,'| 视口高: 1300 | 能滚动:',h>1302);console.log('高亮项:',on);console.log('高亮的是不是最后一项:',on[0]===all[all.length-1]);await b.close();})"
+```
+
+预期：`页面高: 1300 | 视口高: 1300 | 能滚动: false`；`高亮项: [ '块级公式' ]`；`高亮的是不是最后一项: false`。
+
+**`页面高` 会打印 1300 而不是 1155，这不是笔误。** `scrollHeight` 是「内容高度」与「视口高度」的**较大者**——内容只有 1155，视口 1300，所以它读出来是 1300。**别去把它"修正"成 1155**，也别据此认为探针跑错了页面。（内容真实高度 1155 这个数在 Step 6 上面那条 400 视口的探针里是有意义的；这里没有。）
+
+**这条守的是"滚到底兜底"自己的反面**：如果兜底条件写成 `scrollY + innerHeight >= scrollHeight - 2`，那么**文章总高不超过视口时它恒为真**——读者在短随笔的**顶部**，目录却点亮**最后一节**。**这与本步上面裁掉的那个缺陷是同一类**（目录指的位置和读者实际位置不符），只是方向相反。
+
+**这条有判别力，且已实测确认**：改之前跑，输出是 `高亮项: [ '另一个三级标题' ] | 高亮的是不是最后一项: true` —— **红**。改之后才是上面那个预期值。
+
+（正确值恰好是 `块级公式` 而不是 `行内公式`：参考线在 1300×0.3 = **390**，标题位置是 267 / 378 / 612 / …，390 之上的最后一个正是 378 的「块级公式」。**别把它"修正"成 `行内公式`**——那说明你把参考线理解成了视口顶部。）
 
 **为什么断言长这样、而不是分成两条**：目录高亮最容易的坏法有**三种**——① 观察器没工作，谁都不高亮；② 忘了把其它项的高亮摘掉，于是**永远高亮第一项**；③ 写成"叠加"而不是"切换"，**越滚高亮越多**。
 
