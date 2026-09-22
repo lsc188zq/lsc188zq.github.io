@@ -1,0 +1,35 @@
+<button id="theme-toggle" class="theme-toggle" type="button" aria-label="切换主题">☀</button>
+
+<style>
+  .theme-toggle {
+    cursor: pointer;
+    color: var(--ac);
+    font-size: 15px;
+    line-height: 1;
+    padding: 3px 7px;
+    border-radius: 6px;
+    border: 1px solid var(--bd);
+    background: transparent;
+    font-family: var(--sans);
+  }
+  .theme-toggle:hover { background: var(--chip); }
+</style>
+
+<script>
+  const KEY = 'theme';
+  const btn = document.getElementById('theme-toggle');
+
+  function sync() {
+    const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+    if (btn) btn.textContent = dark ? '☀' : '☾';
+  }
+
+  btn?.addEventListener('click', () => {
+    const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', next);
+    localStorage.setItem(KEY, next);
+    sync();
+  });
+
+  sync();
+</script>
