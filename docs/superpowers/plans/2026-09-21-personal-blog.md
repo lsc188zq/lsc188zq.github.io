@@ -17,6 +17,7 @@
 - **Content Layer API**：用 `glob()` loader；渲染用 `render(post)` 返回 `{ Content, headings }`；条目标识用 `post.id`。
 - **Node 版本下限**：≥ 22.12.0（Astro 7 要求）。本机 22.13.0。
 - **npm registry**：`https://registry.npmmirror.com`（已配置）。**不要修改它。**
+- **`@astrojs/markdown-remark` 必须在 dependencies 里**（`^7.3.1`）。Astro 7 的默认 Markdown 处理器换成了 Rust 的 Sätteri；一旦 `markdown.remarkPlugins`/`rehypePlugins` 非空，就必须有 unified 处理器，也就是这个包。它被 astro 声明为 **optional peer**（`peerDependenciesMeta.optional = true`），npm **不会**自动装，缺失时 `npm run build` 直接报错。T1 已装入，后续任务不要再动它。
 - **禁止 `npm run build` 之外的构建方式**；不要引入 UI 框架（React/Vue/Svelte）。
 - **浏览器的获取方式**：一律用 **`playwright-core`**（项目依赖）+ `chromium.launch({ channel: 'msedge' })` 驱动**系统自带的 Edge**。
   - **禁止** `playwright install`：浏览器内核从 `cdn.playwright.dev` 下载，本机实测超时失败，且不受 npm 镜像覆盖。
@@ -272,6 +273,7 @@ git commit -m "chore: Astro 项目脚手架与截图工具"
 
 **Files:**
 - Create: `src/content.config.ts`
+- Create: `src/constants.ts`（Step 1；无依赖的普通模块，供组件安全导入分类枚举）
 - Create: `src/content/blog/_sample.md`（临时样例，Task 10 删除）
 
 **Interfaces:**
@@ -433,13 +435,14 @@ node scripts/shot.mjs "http://localhost:4321/posts/_sample" sample dark
 
 打开 `.shots/sample-dark.png`，逐项确认：
 
-1. 「行内公式」段落下两个公式都渲染成数学符号，**页面上看不到裸露的 `$` 或 `\(`**
-2. 两个块级公式居中独立成行
-3. C++ 代码块**有颜色高亮**（不是纯黑文字）
-4. 代码块里 `$100`、`#define`、`$sum$` **原样显示**，没有被吃掉
-5. 页面顶部显示「标题数：5」（两个 `##`、两个 `###`、一个 `####`）
+1. `$O(n \log n)$` 渲染成数学符号，页面上看不到裸露的 `$`。
+   **同一段里 `\(a^2 + b^2 = c^2\)` 此时会原样显示成文本——这是正确的，不是缺陷。** `remark-math` 底层是 `micromark-extension-math`，定界符**只有 `$`**（源码文档块里是 `$a$` / `\$a$`，唯一选项 `singleDollarTextMath`），它不认识 `\(...\)`。`\(...\)` 是由同步脚本的 `normalizeMath` 在迁移时改写成 `$...$` 的（Task 9–10），而本样例是**手工创建、不经过同步脚本**的。**不要为了让这一条"通过"去改 `astro.config.mjs` 或删掉样例里的 `\(...\)`。** 保留它的价值在于：它同时是一个反向对照，证明管线不会把不认识的定界符悄悄吞掉。Task 10 完成后回来复查。
+2. 只有 `$$...$$` 会居中独立成行；**`\[...\]` 同上，此阶段原样显示为文本，原因与第 1 条完全一致。** 用 `.katex-display` 计数应得 **1**。
+3. C++ 代码块**此时不会着色**，token 颜色仍是继承来的黑色——**这也是正确的**。`defaultColor: false` 下 Shiki 只输出 `--shiki-light` / `--shiki-dark` 两组 CSS 变量、不写 `color`；把变量映射到 `color` 的那段 CSS 在 **Task 7 Step 1**。本任务只需验证 **Shiki 确实产出了这两组变量**（即 `defaultColor: false` 生效），真正的着色验证在 Task 7 Step 6。
+4. 代码块里 `$100`、`#define`、`$sum$` **原样显示**，没有被吃掉。
+5. 页面顶部显示「标题数：7」（样例里是 **4 个 `##`、2 个 `###`、1 个 `####`**：行内公式 / 块级公式 / 代码块里的危险字符 / 标题层级 / 三级标题 / 四级标题 / 另一个三级标题）。数不对就是 `headings` 没拿到，别改断言去迁就实际值——先查为什么
 
-任何一项不符，先停下修好再继续——后面的任务都建立在这条管线上。
+第 1、2、3 条的"不符"是**本阶段的预期状态**，已由控制器核实并裁决（见 SDD 台账 Ruling 6）。除这三条外任何一项不符，先停下修好再继续——后面的任务都建立在这条管线上。
 
 - [ ] **Step 7: 提交**
 

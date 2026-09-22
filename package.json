@@ -1,0 +1,29 @@
+{
+  "name": "myblog",
+  "type": "module",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "check": "astro check",
+    "sync": "node scripts/sync-vault.mjs",
+    "check:math": "node scripts/check-math.mjs",
+    "test": "node --test test/"
+  },
+  "dependencies": {
+    "@astrojs/markdown-remark": "^7.3.1",
+    "astro": "^7.3.3",
+    "gray-matter": "^4.0.3",
+    "katex": "^0.16.11",
+    "rehype-katex": "^7.0.1",
+    "remark-math": "^6.0.0"
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.4",
+    "pagefind": "^1.5.2",
+    "playwright-core": "^1.56.0",
+    "typescript": "^5.6.3"
+  }
+}
