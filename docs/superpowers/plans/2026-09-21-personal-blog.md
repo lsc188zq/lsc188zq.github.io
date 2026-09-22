@@ -1147,14 +1147,26 @@ node scripts/shot.mjs "http://localhost:4321/" home dark
 - [ ] **Step 5: 验证筛选真的生效**
 
 ```bash
-node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage();await p.goto('http://localhost:4321/');await p.click('.cf-btn[data-cat=\"知识\"]');await p.waitForTimeout(200);const vis=await p.\$\$eval('.card',ns=>ns.filter(n=>getComputedStyle(n).display!=='none').length);const st=await p.textContent('#list-status');console.log('可见卡片:',vis,'| 状态行:',st);await p.screenshot({path:'.shots/home-filtered.png',fullPage:true});await b.close();})"
+**点一个当前 0 篇的分类**（不要点「知识」）：
+
+```bash
+node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage();await p.goto('http://localhost:4321/');const vis=async()=>await p.\$\$eval('.card',ns=>ns.filter(n=>getComputedStyle(n).display!=='none').length);const st=async()=>await p.textContent('#list-status');await p.click('.cf-btn[data-cat=\"技术\"]');await p.waitForTimeout(200);console.log('技术(0篇) ->','可见卡片:',await vis(),'| 状态行:',await st());await p.screenshot({path:'.shots/home-filtered-empty.png',fullPage:true});await p.click('.cf-btn[data-cat=\"__all__\"]');await p.waitForTimeout(200);console.log('全部 ->','可见卡片:',await vis(),'| 状态行:',await st());await p.screenshot({path:'.shots/home-filtered.png',fullPage:true});await b.close();})"
 ```
 
-预期：`可见卡片: 1 | 状态行: 知识 · 1 篇`。
+预期：
 
-**探针为什么数的是"计算样式"而不是 `:not([hidden])`**：`hidden` 属性的 `display:none` 来自 UA 样式表，属"呈现性提示"，优先级低于作者样式。`PostCard` 里的 `.card{display:grid}` 会把它盖掉——属性设上了、`:not([hidden])` 也数得对，**但卡片一张都没从画面上消失**。已实测确认。用 `getComputedStyle(...)!=='none'` 数，才是"用户真的看得见几张"。所以 `PostCard` 里那条 `.card[hidden]{display:none}` 是功能的一部分，不是可选的样式糖。
+```
+技术(0篇) -> 可见卡片: 0 | 状态行: 技术 · 0 篇
+全部      -> 可见卡片: 1 | 状态行: 共 1 篇
+```
 
-**并且必须目视确认 `.shots/home-filtered.png` 里只剩 1 张卡片。** 这条不能只靠 DOM 探针——上面那个假通过的坑，探针本身就是帮凶。若可见数为 0，检查 `PostCard` 的 `data-category` 是否与 `CATEGORIES` 里的字符串完全一致（含中文，不能有空格差异）。
+**为什么必须点「技术」而不是点「知识」**：全库此刻唯一的文章就是「知识」分类。点「知识」得到 `可见卡片: 1`，而这个输出**同时**对应三种情况——① 筛选正常工作；② 筛选压根没跑；③ `.card[hidden]` 没生效、但 `hidden` 属性设上了。**它排不掉它本该防的那两种坏法，等于没测。** 只有让可见数真的**归零**，才同时证明了「筛选跑了」**且**「隐藏真的在画面上生效」；再点回「全部」把数恢复到 1，排掉「把卡片全藏了」这种过度隐藏。
+
+（**这是本项目第四次栽在同一件事上**：探针的输出在坏掉时和好着时一模一样。前三次是 T5 的 `:not([hidden])` 计数、T4 的首帧探针、T4 的异常注入测试。已提为全局约束。）
+
+**探针为什么数的是"计算样式"而不是 `:not([hidden])` 的个数**：`hidden` 属性的 `display:none` 来自 UA 样式表，属"呈现性提示"，优先级低于作者样式。`PostCard` 里的 `.card{display:grid}` 会把它盖掉——属性设上了、`:not([hidden])` 也数得对，**但卡片一张都没从画面上消失**。已实测确认。用 `getComputedStyle(...)!=='none'` 数，才是"用户真的看得见几张"。所以 `PostCard` 里那条 `.card[hidden]{display:none}` 是功能的一部分，不是可选的样式糖。
+
+**并且必须目视确认这两张截图**：`home-filtered-empty.png` 里**卡片区一张不剩**（连分隔线都不该有），`home-filtered.png` 里**只剩 1 张**。这条不能只靠 DOM 探针——上面那个假通过的坑，探针本身就是帮凶。若「技术」的可见数不是 0，先检查 `PostCard` 的 `data-category` 是否与 `CATEGORIES` 里的字符串完全一致（含中文，不能有空格差异）。
 
 - [ ] **Step 6: 提交**
 
