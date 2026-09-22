@@ -976,6 +976,14 @@ const iso = date.toISOString().slice(0, 10);
     border-radius: 4px;
   }
   .card-cat:hover { color: var(--tx); text-decoration: none; }
+  /*
+    hidden 属性靠 UA 样式表的 [hidden]{display:none} 生效，而 UA 规则属于
+    "呈现性提示"，优先级低于作者样式——上面的 .card{display:grid} 会把它盖掉。
+    结果是卡片属性设上了 hidden、DOM 查询也数得对，但**画面上一张都没少**。
+    .card[hidden] 特异性(0,2,0)高于 .card(0,1,0)，这一条必须留着。
+    已实测确认：少了它，getComputedStyle(el).display 仍返回 "grid"。
+  */
+  .card[hidden] { display: none; }
   @media (max-width: 600px) {
     .card { grid-template-columns: 1fr; gap: 6px; }
   }
@@ -1107,10 +1115,14 @@ node scripts/shot.mjs "http://localhost:4321/" home dark
 - [ ] **Step 5: 验证筛选真的生效**
 
 ```bash
-node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage();await p.goto('http://localhost:4321/');await p.click('.cf-btn[data-cat=\"知识\"]');await p.waitForTimeout(200);const vis=await p.\$\$eval('.card:not([hidden])',n=>n.length);const st=await p.textContent('#list-status');console.log('可见卡片:',vis,'| 状态行:',st);await p.screenshot({path:'.shots/home-filtered.png',fullPage:true});await b.close();})"
+node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage();await p.goto('http://localhost:4321/');await p.click('.cf-btn[data-cat=\"知识\"]');await p.waitForTimeout(200);const vis=await p.\$\$eval('.card',ns=>ns.filter(n=>getComputedStyle(n).display!=='none').length);const st=await p.textContent('#list-status');console.log('可见卡片:',vis,'| 状态行:',st);await p.screenshot({path:'.shots/home-filtered.png',fullPage:true});await b.close();})"
 ```
 
-预期：`可见卡片: 1 | 状态行: 知识 · 1 篇`。若可见数为 0，检查 `PostCard` 的 `data-category` 是否与 `CATEGORIES` 里的字符串完全一致（含中文，不能有空格差异）。
+预期：`可见卡片: 1 | 状态行: 知识 · 1 篇`。
+
+**探针为什么数的是"计算样式"而不是 `:not([hidden])`**：`hidden` 属性的 `display:none` 来自 UA 样式表，属"呈现性提示"，优先级低于作者样式。`PostCard` 里的 `.card{display:grid}` 会把它盖掉——属性设上了、`:not([hidden])` 也数得对，**但卡片一张都没从画面上消失**。已实测确认。用 `getComputedStyle(...)!=='none'` 数，才是"用户真的看得见几张"。所以 `PostCard` 里那条 `.card[hidden]{display:none}` 是功能的一部分，不是可选的样式糖。
+
+**并且必须目视确认 `.shots/home-filtered.png` 里只剩 1 张卡片。** 这条不能只靠 DOM 探针——上面那个假通过的坑，探针本身就是帮凶。若可见数为 0，检查 `PostCard` 的 `data-category` 是否与 `CATEGORIES` 里的字符串完全一致（含中文，不能有空格差异）。
 
 - [ ] **Step 6: 提交**
 
