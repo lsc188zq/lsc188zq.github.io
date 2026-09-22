@@ -1270,26 +1270,56 @@ const toc = headings.filter((h) => h.depth === 2 || h.depth === 3);
 
 <script>
   const links = Array.from(document.querySelectorAll('.toc-link'));
-  const targets = links
-    .map((l) => document.getElementById(l.dataset.target))
-    .filter((el) => el !== null);
 
-  if (targets.length) {
-    const obs = new IntersectionObserver(
-      (entries) => {
-        for (const e of entries) {
-          if (!e.isIntersecting) continue;
-          links.forEach((l) => l.classList.toggle('on', l.dataset.target === e.target.id));
-        }
-      },
-      { rootMargin: '0px 0px -70% 0px', threshold: 0 }
-    );
-    targets.forEach((t) => obs.observe(t));
-  }
+  // 缓存每个标题的**文档绝对位置**。getBoundingClientRect().top + scrollY 与当前
+  // 滚动位置无关，所以只需在加载和 resize 时各算一次——scroll 回调里就不读布局了。
+  let tops = [];
+  const measure = () => {
+    tops = links.map((l) => {
+      const el = document.getElementById(l.dataset.target);
+      return el ? el.getBoundingClientRect().top + scrollY : Infinity;
+    });
+  };
+
+  const LINE = 0.3; // 参考线取视口高度的 30%
+
+  const sync = () => {
+    const y = scrollY + innerHeight * LINE;
+    const atBottom = scrollY + innerHeight >= document.documentElement.scrollHeight - 2;
+    // 滚到底时，末尾几节的标题因为**无处可滚**，永远到不了参考线——没有这一条，
+    // 目录里最后几节永远高亮不了，点它们的链接也毫无反应。
+    // 已实测：点「另一个三级标题」跳到底部后，原实现的高亮项是空数组。
+    let idx = atBottom ? links.length - 1 : 0;
+    if (!atBottom) {
+      for (let i = 0; i < tops.length; i++) if (tops[i] <= y) idx = i;
+    }
+    links.forEach((l, i) => l.classList.toggle('on', i === idx));
+  };
+
+  measure();
+  sync();
+  addEventListener('scroll', sync, { passive: true });
+  addEventListener('resize', () => { measure(); sync(); });
 </script>
 ```
 
-`rootMargin: '0px 0px -70% 0px'` 的作用：把观察区域的底部收缩 70%，这样只有进入视口上方 30% 的标题才算「当前」，否则页面中间那个标题会一直高亮，与阅读位置不符。
+**为什么不用 `IntersectionObserver`**：初版是 `rootMargin: '0px 0px -70% 0px'` + IntersectionObserver，**已实测有真实缺陷，而且是用户直接看得见的**（T6 实施者发现，控制器独立复现后裁定返工）：
+
+- 观察带是「视口顶部 30%」。**页面滚到底时，最后几节的标题因为无处可滚，永远进不了这条带。**
+- 样例文章的实测几何：页面 **1155** / 视口 400 / 最大滚动 **755**；6 个标题的文档位置是 267 / 378 / 612 / **935** / **996** / **1093**；带底 = 755 + 400×0.3 = **875** —— **最后三个标题永远够不到 875**。
+- 后果两条：
+  1. **点目录里「另一个三级标题」跳到底部，目录一项都不亮**（实测 `高亮: []`）；
+  2. 阶梯滚到底，读者已经在最后三节，目录却停在第四节「代码块里的危险字符」（实测如此）。
+- 还有第三条隐患：高亮是**黏的**——只在 `isIntersecting` 为真时才切换，标题离开观察带时不清除。所以"高亮项"和"读到的位置"可以差好几节。
+
+改成「**参考线 + 滚到底兜底**」：参考线仍在视口 30% 处（保持原设计意图），但滚到底时直接点亮最后一项。实测新逻辑单调推进、每一项都能点亮：
+
+```
+scrollY   0  -> 行内公式
+scrollY 360  -> 块级公式
+scrollY 500  -> 代码块里的危险字符
+scrollY 755  -> 另一个三级标题     ← 原实现这里高亮为空
+```
 
 - [ ] **Step 2: 创建文章页骨架**
 
@@ -1498,9 +1528,11 @@ node -e "import('playwright-core').then(async({chromium})=>{const b=await chromi
 
 预期：`能滚动: true`；`目录全部` **6 项**；`滚到底时高亮的目录项` **恰好 1 项**，且**不是第一项**；`滚动高亮正常: true`。
 
-**两个刻意的设计，别改**：
-- **视口高度写死 400**（不是 800）。实测（1100 宽 / 样例文章 T4 版布局）：页面高 **1120**，800 高的视口只能滚 **320px**，400 高时能滚 **720px**。800 不是滚不动，但**滚动范围太小**——"滚到底"和"刚滚一点"在 400 视口下差得足够远，高亮位置的判断才有信息量。
+**三个刻意的设计，别改**：
+- **视口高度写死 400**（不是 800）。实测（1100 宽 / **T6 版两栏布局**，即本任务完成后的实际布局）：页面高 **1155**，最大滚动 **755**；800 高的视口只剩 **355** 的滚动范围。800 不是滚不动，但**滚动范围太小**——"滚到底"和"刚滚一点"在 400 视口下差得足够远，高亮位置的判断才有信息量。
+  （注：T4 版布局量到的是 1120 / 720。本任务的两栏网格把正文列压窄了，行数变多，所以页面变高。**别照着 1120 去核对**。）
 - **先打印 `能滚动`**。若它输出 `false`，说明这条验证此刻**无意义**，要在报告里如实写"页面不够长，滚动高亮未能验证"，**不要当成通过**。
+- **必须是「直接跳到底」而不是「阶梯滚到底」**。这不是省事，是**这条探针唯一有判别力的写法**：原实现（IntersectionObserver + 顶部 30% 观察带）在**阶梯滚动时表现是对的**，只有**直接跳到底**才会暴露"最后三节永远进不了观察带"这个缺陷（实测：阶梯滚到底高亮 `代码块里的危险字符`，直接跳到底高亮 `[]`）。改成阶梯滚动会让这条探针**变绿而缺陷仍在**——本项目第七次遇到「探针在坏掉时和好着时输出一样」。判断依据仍然是那句话：**把坏法注进去，它会红吗？** 这里"坏法"就是原实现，答案是「只有直接跳才会红」。
 
 **为什么断言长这样、而不是分成两条**：目录高亮最容易的坏法有**三种**——① 观察器没工作，谁都不高亮；② 忘了把其它项的高亮摘掉，于是**永远高亮第一项**；③ 写成"叠加"而不是"切换"，**越滚高亮越多**。
 
