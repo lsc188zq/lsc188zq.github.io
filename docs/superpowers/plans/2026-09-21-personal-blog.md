@@ -688,7 +688,7 @@ git commit -m "feat: 设计令牌与正文排版样式"
 创建 `src/components/ThemeToggle.astro`：
 
 ```astro
-<button id="theme-toggle" class="theme-toggle" type="button" aria-label="切换主题">☀</button>
+<button id="theme-toggle" class="theme-toggle" type="button" aria-label="切换到浅色">☀</button>
 
 <style>
   .theme-toggle {
@@ -711,13 +711,24 @@ git commit -m "feat: 设计令牌与正文排版样式"
 
   function sync() {
     const dark = document.documentElement.getAttribute('data-theme') === 'dark';
-    if (btn) btn.textContent = dark ? '☀' : '☾';
+    if (btn) {
+      btn.textContent = dark ? '☀' : '☾';
+      // aria-label 必须跟着状态走。只写死一个"切换主题"的话，
+      // 屏幕阅读器用户永远只知道"这里有个按钮"，不知道当前是什么主题、
+      // 按下去会变成什么——而视力正常的用户看得见 ☀/☾ 的切换。
+      btn.setAttribute('aria-label', dark ? '切换到浅色' : '切换到深色');
+    }
   }
 
   btn?.addEventListener('click', () => {
     const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
     document.documentElement.setAttribute('data-theme', next);
-    localStorage.setItem(KEY, next);
+    // localStorage 在部分隐私设置/沙箱环境下写入也会抛异常。
+    // 不兜住的话，主题在视觉上已经切了，但 sync() 永远执行不到，
+    // 图标和 aria-label 会停在旧状态。
+    try {
+      localStorage.setItem(KEY, next);
+    } catch (e) {}
     sync();
   });
 
@@ -805,7 +816,14 @@ const { title, description = '个人博客' } = Astro.props;
     -->
     <script is:inline>
       (function () {
-        var t = localStorage.getItem('theme') || 'dark';
+        var t = 'dark';
+        // localStorage 在部分隐私设置/沙箱环境下读取会直接抛异常。
+        // 不兜住的话整个 IIFE 在 setAttribute 之前就中断了，
+        // 这些用户每次加载都落到 :root 的浅色 token 上——
+        // 与"初始主题固定为深色"的意图相反。
+        try {
+          t = localStorage.getItem('theme') || 'dark';
+        } catch (e) {}
         document.documentElement.setAttribute('data-theme', t);
       })();
     </script>
@@ -890,6 +908,10 @@ node -e "import('playwright-core').then(async({chromium})=>{const b=await chromi
 ```
 
 预期：输出 `首帧背景: rgb(13, 17, 23)`。若是 `rgb(255, 255, 255)`，说明内联脚本没生效或位置不对。
+
+**这条探针只能证明一半，别把它当 FOUC 的证明。** `page.goto` 默认等到 `load` 事件才返回，而 `<script type="module">`（Astro 对**非** `is:inline` 的脚本的默认处理）是 defer 的，同样在 `load` 之前就跑完了。也就是说：**有人把 `is:inline` 去掉、或者把脚本挪到 `<body>` 末尾，这条探针照样打印 `rgb(13,17,23)`。** 它能证明的只是"深色是默认值、没读 `prefers-color-scheme`"，证明不了"脚本是同步内联在 `<head>` 里的"。
+
+真正能证明 FOUC 性质的是**构建产物**：`dist/` 里该页面的 `<head>` 内应当有一个**无 `src`、无 `type="module"`** 的 `<script>`，且在 `<body>` 之前。这条是权威判据，探针是辅助。
 
 - [ ] **Step 7: 提交**
 
