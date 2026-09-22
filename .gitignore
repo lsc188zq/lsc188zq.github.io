@@ -23,3 +23,9 @@ Thumbs.db
 # 编辑器
 .vscode/
 .idea/
+
+# 截图产物
+.shots/
+
+# 部署
+dist/
