@@ -1845,13 +1845,24 @@ import PostCard from '../../components/PostCard.astro';
 
 export async function getStaticPaths() {
   const posts = await getCollection('blog', ({ data }) => !data.draft);
-  const tags = [...new Set(posts.flatMap((p) => p.data.tags))];
-  return tags.map((tag) => ({ params: { tag } }));
+  // 这个路由同时服务于「标签」和「分类」两类链接。
+  //
+  // 首页卡片的分类芯片（PostCard 里的 .card-cat）指向 /tags/<分类名>，
+  // 但 category 和 tags 是 schema 里两个互不相干的字段——只收 tags 的话，
+  // **每一张卡片上的分类芯片都会 404**，而且 T13 之前还没有 404 页面兜着。
+  // 所以这里取两者的并集。
+  const names = [...new Set(posts.flatMap((p) => [...p.data.tags, p.data.category]))];
+  return names.map((tag) => ({ params: { tag } }));
 }
 
 const { tag } = Astro.params;
+// 同理，命中条件是「是标签」或「是分类」。两者同名时并集已去重，不会重复渲染。
+//
+// 注：Astro.params.tag 在类型上是 string | undefined。这里不需要处理 undefined
+// ——getStaticPaths 生成的每个路径都带 tag。编辑器里的 TS 报错就是它，
+// npm run build 不跑类型检查，不会因此失败。
 const posts = (await getCollection('blog', ({ data }) => !data.draft))
-  .filter((p) => p.data.tags.includes(tag))
+  .filter((p) => p.data.tags.includes(tag) || p.data.category === tag)
   .sort((a, b) => b.data.date.getTime() - a.data.date.getTime());
 ---
 <BaseLayout title={`#${tag}`}>
@@ -1893,12 +1904,31 @@ npm run preview
 
 ```bash
 node scripts/shot.mjs "http://localhost:4321/tags" tags dark
-node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage();await p.goto('http://localhost:4321/tags');const href=await p.getAttribute('.cloud-item','href');console.log('标签链接:',href);await p.click('.cloud-item');await p.waitForTimeout(300);console.log('跳转后标题:',await p.textContent('.page-title'));await b.close();})"
 ```
 
-预期：链接形如 `/tags/%E6%B5%8B%E8%AF%95`（浏览器地址栏会显示成中文），点击后页面标题为 `#测试`。
+```bash
+node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage();await p.goto('http://localhost:4321/tags');const items=await p.\$\$eval('.cloud-item',ns=>ns.map(n=>({href:n.getAttribute('href'),name:n.querySelector('.cloud-name').textContent})));console.log('标签数:',items.length);for(const i of items)console.log('  ',i.name,'->',i.href);console.log('出现双重编码(%25):',items.some(i=>i.href.includes('%25')));await p.click('.cloud-item');await p.waitForTimeout(300);console.log('跳转后 URL:',p.url());console.log('跳转后标题:',await p.textContent('.page-title'));console.log('标题与第一个标签一致:',(await p.textContent('.page-title'))===items[0].name);await b.close();})"
+```
 
-- [ ] **Step 4: 提交**
+预期：`标签数: 2`；两个 `href` 都是**单次百分号编码**（形如 `/tags/%E6%B5%8B%E8%AF%95`）；`出现双重编码(%25): false`；`标题与第一个标签一致: true`。
+
+**为什么不写死「第一个一定是 `#测试`」**：标签云按「出现次数倒序、同次数按 `localeCompare(zh)`」排。样例的两个标签都是 1 篇，谁在前**取决于 Node 的 ICU 中文排序**（按拼音 测 cè 在 公 gōng 之前）——这条依赖是真的，但它不是本任务要验的东西，写死了会变成一个和 ICU 版本绑定的脆断言。真正要验的是**「没有被双重编码」**（`%25` 不出现）和**「点进去的标题和点的那一项对得上」**，这两条与排序无关。
+
+- [ ] **Step 4: 验证分类芯片不会 404（本任务修的就是这个）**
+
+首页每张卡片的分类芯片都指向 `/tags/<分类名>`，而分类是**另一个字段**。若 `getStaticPaths` 只收标签，这些链接**全部 404**——T13 之前连 404 页面都没有。
+
+```bash
+node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage();await p.goto('http://localhost:4321/');const href=await p.getAttribute('.card-cat','href');console.log('分类芯片链接:',href);const r=await p.goto('http://localhost:4321'+href);console.log('状态码:',r.status());console.log('页面标题:',await p.textContent('.page-title'));await b.close();})"
+```
+
+预期：`分类芯片链接: /tags/%E7%9F%A5%E8%AF%86`（即 `知识`）；`状态码: 200`（**不是 404**）；`页面标题: #知识`。
+
+**若状态码是 404**，就是 `getStaticPaths` 里没并入 `p.data.category`——这正是本步要拦的回归。
+
+（**服务端解码这条已经排除掉了，不用怀疑它。** 控制器实测过：把 `dist/tags/知识/index.html` 放进去后用 `astro preview` 请求，`/tags/%E7%9F%A5%E8%AF%86`、`/tags/%E7%9F%A5%E8%AF%86/`、`/tags/知识` 三种写法**都返回 200**。所以这里的 404 只可能是页面没被生成。）
+
+- [ ] **Step 5: 提交**
 
 ```bash
 git add -A
