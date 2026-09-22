@@ -22,7 +22,14 @@ const { title, description = '个人博客' } = Astro.props;
     -->
     <script is:inline>
       (function () {
-        var t = localStorage.getItem('theme') || 'dark';
+        var t = 'dark';
+        // localStorage 在部分隐私设置/沙箱环境下读取会直接抛异常。
+        // 不兜住的话整个 IIFE 在 setAttribute 之前就中断了，
+        // 这些用户每次加载都落到 :root 的浅色 token 上——
+        // 与"初始主题固定为深色"的意图相反。
+        try {
+          t = localStorage.getItem('theme') || 'dark';
+        } catch (e) {}
         document.documentElement.setAttribute('data-theme', t);
       })();
     </script>

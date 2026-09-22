@@ -1,4 +1,4 @@
-<button id="theme-toggle" class="theme-toggle" type="button" aria-label="切换主题">☀</button>
+<button id="theme-toggle" class="theme-toggle" type="button" aria-label="切换到浅色">☀</button>
 
 <style>
   .theme-toggle {
@@ -21,13 +21,24 @@
 
   function sync() {
     const dark = document.documentElement.getAttribute('data-theme') === 'dark';
-    if (btn) btn.textContent = dark ? '☀' : '☾';
+    if (btn) {
+      btn.textContent = dark ? '☀' : '☾';
+      // aria-label 必须跟着状态走。只写死一个"切换主题"的话，
+      // 屏幕阅读器用户永远只知道"这里有个按钮"，不知道当前是什么主题、
+      // 按下去会变成什么——而视力正常的用户看得见 ☀/☾ 的切换。
+      btn.setAttribute('aria-label', dark ? '切换到浅色' : '切换到深色');
+    }
   }
 
   btn?.addEventListener('click', () => {
     const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
     document.documentElement.setAttribute('data-theme', next);
-    localStorage.setItem(KEY, next);
+    // localStorage 在部分隐私设置/沙箱环境下写入也会抛异常。
+    // 不兜住的话，主题在视觉上已经切了，但 sync() 永远执行不到，
+    // 图标和 aria-label 会停在旧状态。
+    try {
+      localStorage.setItem(KEY, next);
+    } catch (e) {}
     sync();
   });
 
