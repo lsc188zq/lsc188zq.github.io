@@ -1947,10 +1947,17 @@ node scripts/shot.mjs "http://localhost:4321/tags" tags dark
 ```
 
 ```bash
-node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage();await p.goto('http://localhost:4321/tags');const items=await p.\$\$eval('.cloud-item',ns=>ns.map(n=>({href:n.getAttribute('href'),name:n.querySelector('.cloud-name').textContent})));console.log('标签数:',items.length);for(const i of items)console.log('  ',i.name,'->',i.href);console.log('出现双重编码(%25):',items.some(i=>i.href.includes('%25')));await p.click('.cloud-item');await p.waitForTimeout(300);console.log('跳转后 URL:',p.url());console.log('跳转后标题:',await p.textContent('.page-title'));console.log('标题与第一个标签一致:',(await p.textContent('.page-title'))===items[0].name);await b.close();})"
+node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage();await p.goto('http://localhost:4321/tags');const items=await p.\$\$eval('.cloud-item',ns=>ns.map(n=>({href:n.getAttribute('href'),name:n.querySelector('.cloud-name').textContent})));console.log('标签数:',items.length);for(const i of items)console.log('  ',i.name,'->',i.href);console.log('出现双重编码(%25):',items.some(i=>i.href.includes('%25')));await p.click('.cloud-item');await p.waitForTimeout(300);console.log('跳转后 URL:',p.url());console.log('跳转后标题:',await p.textContent('.page-title'));console.log('标题与第一个标签一致:',(await p.textContent('.page-title'))===items[0].name);await p.goto('http://localhost:4321/tags/'+encodeURIComponent('知识'));await p.waitForTimeout(300);console.log('分类名标签页(/tags/知识) -> 卡片数:',await p.\$\$eval('.card',n=>n.length),'| 页脚:',await p.textContent('.page-sub'));await b.close();})"
 ```
 
-预期：`标签数: 2`；两个 `href` 都是**单次百分号编码**（形如 `/tags/%E6%B5%8B%E8%AF%95`）；`出现双重编码(%25): false`；`标题与第一个标签一致: true`。
+预期：`标签数: 2`；两个 `href` 都是**单次百分号编码**（形如 `/tags/%E6%B5%8B%E8%AF%95`）；`出现双重编码(%25): false`；`标题与第一个标签一致: true`；`分类名标签页(/tags/知识) -> 卡片数: 1 | 页脚: ← 全部标签 · 1 篇`。
+
+**最后那条不是凑数——它守的是 Step 2 里那段注释说的事，而前面几条全都守不住它。** `/tags/<分类名>` 这条链接由**同一个路由**服务，但命中条件必须是「是标签**或**是分类」的并集。如果只按 `tags.includes(tag)` 过滤：
+
+- 页面**照样渲染出来**（`getStaticPaths` 生成了这个路径），标题也**照样**是 `#知识`——所以 `标题与第一个标签一致: true` **通过**；
+- 但它会是 **0 篇**，也就是首页那张卡片的分类芯片点进去是个空页；
+- **而这条缺陷此刻在标签页上完全看不出来**：全库只有 1 篇文章，标签「测试」页和分类「知识」页的篇数都是 1，**数字一样，坏掉与好着时输出相同**（第五次那个坑的变体）。
+- 必须**直接去看那个分类名的页面上有几张卡片**，才有判别力。`1` 是唯一正确的值；`0` 就说明过滤条件漏了 `|| p.data.category === tag`。
 
 **为什么不写死「第一个一定是 `#测试`」**：标签云按「出现次数倒序、同次数按 `localeCompare(zh)`」排。样例的两个标签都是 1 篇，谁在前**取决于 Node 的 ICU 中文排序**（按拼音 测 cè 在 公 gōng 之前）——这条依赖是真的，但它不是本任务要验的东西，写死了会变成一个和 ICU 版本绑定的脆断言。真正要验的是**「没有被双重编码」**（`%25` 不出现）和**「点进去的标题和点的那一项对得上」**，这两条与排序无关。
 
