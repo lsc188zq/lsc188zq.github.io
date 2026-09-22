@@ -3060,7 +3060,7 @@ git commit -m "feat: 首次迁移 36 篇文章并加入公式检查脚本"
 
 **Files:**
 - Create: `src/components/Search.astro`, `src/components/Comments.astro`
-- Modify: `package.json`（build 脚本追加 pagefind）、`src/layouts/BaseLayout.astro`（引入搜索）、`src/layouts/PostLayout.astro`（引入评论）
+- Modify: `package.json`（build 脚本追加 pagefind）、`src/layouts/BaseLayout.astro`（引入搜索）、`src/layouts/PostLayout.astro`（引入评论 + 给 `<article>` 加 `data-pagefind-body`）
 
 **Interfaces:**
 - Consumes: Task 11 生成的真实文章
@@ -3126,7 +3126,9 @@ git commit -m "feat: 首次迁移 36 篇文章并加入公式检查脚本"
 
   async function ensure() {
     if (!pagefind) {
-      pagefind = await import('/pagefind/pagefind.js');
+      // 构建期这个文件还不存在——pagefind 是在 astro build **跑完之后**才生成它的。
+      // @vite-ignore 让 Vite 别去解析这个路径，原样留给运行时按站点根路径去取。
+      pagefind = await import(/* @vite-ignore */ '/pagefind/pagefind.js');
       await pagefind.options({ excerptLength: 30 });
     }
     return pagefind;
@@ -3181,7 +3183,30 @@ import Search from '../components/Search.astro';
 "build": "astro build && pagefind --site dist",
 ```
 
-Pagefind 会扫描 `dist/` 里的 HTML，把索引写入 `dist/pagefind/`。它默认不索引带有 `data-pagefind-ignore` 的元素，且只收录 `<main>` 或 `<article>` 的内容——本项目的文章正文在 `<article>` 内，无需额外配置。
+Pagefind 会扫描 `dist/` 里的 HTML，把索引写入 `dist/pagefind/`。
+
+**必须显式圈定索引范围，别信「默认只收正文」。** Pagefind 官方文档原文是
+*"By default, Pagefind starts indexing from your `<body>` element."* —— 默认根是
+`<body>`，**不是** `<main>`，**也不是** `<article>`。而本站的 `<main class="shell">`
+（`BaseLayout.astro:39`）包住的不只是正文：首页/标签页/归档页的**卡片列表**、
+文章页的**目录**、**上一篇/下一篇**、**评论占位文案**，全都落在里面。
+
+不圈的后果：搜一个词，`/`、`/tags/知识`、`/archive` 的卡片列表**各自成为一条结果**
+并且排在文章前面；搜「giscus」会命中**全部**文章页（评论占位文案里就有这个词）。
+
+所以给 `src/layouts/PostLayout.astro` 的 `<article>` 加上 `data-pagefind-body`：
+
+```astro
+    <article data-pagefind-body>
+```
+
+文档原文正是推荐这个做法：*"if you tag your blog post layout with `data-pagefind-body`,
+other pages like your homepage will no longer appear in search results. **This is
+usually what you want.**"* 目录、上下篇、评论占位都是 `<article>` 的**兄弟节点**，
+自动被排除，不需要再逐个加 `data-pagefind-ignore`。
+
+**代价（知情接受）**：首页、标签页、关于页从此不出现在搜索结果里。哪天想让关于页可搜，
+给它也加一个 `data-pagefind-body` 即可。
 
 - [ ] **Step 3: 验证搜索**
 
@@ -3196,10 +3221,19 @@ npm run preview
 另开终端：
 
 ```bash
-node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage();const errs=[];p.on('pageerror',e=>errs.push(String(e)));await p.goto('http://localhost:4321/');await p.fill('#search-input','动态规划');await p.waitForTimeout(1800);const n=await p.\$\$eval('.sr-item',x=>x.length);const first=await p.textContent('.sr-item .sr-title').catch(()=>'(无)');console.log('结果数:',n,'| 首条:',first);console.log('页面错误:',errs.length?errs:'无');await p.screenshot({path:'.shots/search.png'});await b.close();})"
+node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage();const errs=[];p.on('pageerror',e=>errs.push(String(e)));await p.goto('http://localhost:4321/');const title=(await p.textContent('.card-title')).trim();const q=title.slice(0,4);await p.fill('#search-input',q);await p.waitForTimeout(2000);const paths=await p.\$\$eval('.sr-item',xs=>xs.map(x=>new URL(x.href).pathname));console.log('查询词:',q,'| 结果数:',paths.length);console.log('结果路径:',JSON.stringify(paths));console.log('全部是文章页:',paths.length>0&&paths.every(u=>u.startsWith('/posts/')));console.log('页面错误:',errs.length?errs:'无');await p.screenshot({path:'.shots/search.png'});await b.close();})"
 ```
 
-预期：`结果数` > 0，`页面错误: 无`。若结果数为 0，先确认 `dist/pagefind/` 目录存在；若不存在，说明 `pagefind` 未正确安装或 build 脚本没生效。
+预期：`结果数` > 0、**`全部是文章页: true`**、`页面错误: 无`。
+
+- **`全部是文章页` 才是能分辨配置对错的那一条。** 忘了给 `<article>` 加 `data-pagefind-body`
+  时，`结果路径` 里会出现 `/`、`/tags/...`、`/archive`，它变 `false`；而 `结果数` 那一条
+  **配错时一样为真**——首页和各标签页的卡片列表本身就够凑出一个正数。
+  **只断言 `结果数 > 0` 等于没断言。**
+- 查询词是从首页第一张卡的标题里**现取**的前 4 个字，不写死。写死（比如 `'动态规划'`）
+  就会引入一个没人验证过的依赖：「那 36 篇里到底有没有这个词」。
+- 若 `结果数: 0`，先看打印出来的 `查询词` 是不是不足 2 个字（输入框在 `q.length < 2` 时
+  直接不搜）；再看 `dist/pagefind/` 目录是否存在。不存在说明 `pagefind` 没装好或 build 脚本没生效。
 
 - [ ] **Step 4: 创建评论组件**
 
