@@ -2733,6 +2733,21 @@ for (const rel of candidates) {
   });
 }
 
+// ---- slug 冲突检测 ----
+
+// 不同目录下的同名文件会产出同一个 slug（slug 只取文件名），后写的那篇会
+// **静默覆盖**先写的那篇——等于凭空丢一篇文章，而且没有任何报错。
+// 只警告不中断：一次小冲突不该挡住整次同步；警告至少让人当场看见。
+const bySlug = new Map();
+const collisions = [];
+for (const p of published) {
+  const prev = bySlug.get(p.slug);
+  if (prev) {
+    collisions.push(`${p.slug}: ${prev} ↔ ${p.rel}`);
+    console.warn(`[警告] slug 冲突: "${p.slug}" ← ${prev} 与 ${p.rel}，后者会覆盖前者`);
+  } else bySlug.set(p.slug, p.rel);
+}
+
 // ---- 写入 ----
 
 await fs.mkdir(OUT_DIR, { recursive: true });
@@ -2771,6 +2786,10 @@ console.log(`  发布目录候选: ${candidates.length} 篇`);
 console.log(`  已标记发布:   ${published.length} 篇  (新增 ${added} / 更新 ${updated})`);
 console.log(`  已删除:       ${removed.length} 篇`);
 removed.forEach((f) => console.log(`    - ${f}`));
+if (collisions.length > 0) {
+  console.log(`  !! slug 冲突: ${collisions.length} 处（后者已覆盖前者，等于丢文章）`);
+  collisions.forEach((c) => console.log(`    ! ${c}`));
+}
 
 if (skipped.length > 0) {
   console.log(`\n  未标记 publish: true 而跳过: ${skipped.length} 篇`);
@@ -2783,22 +2802,44 @@ if (skipped.length > 0) {
 
 - [ ] **Step 4: 验证脚本能跑通（此时应为 0 篇）**
 
+**先记下博客内容目录当前的样子——这一步不能省，理由见下。**
+
+```bash
+ls -1 src/content/blog/
+```
+
 ```bash
 npm run sync
 ```
 
-预期：输出「已标记发布: 0 篇」，随后列出所有未标记的文件。**此时不应该有任何文件被写入 `src/content/blog/`。**
+```bash
+ls -1 src/content/blog/
+```
+
+预期：输出「已标记发布: 0 篇」，随后列出所有未标记的文件；且**两次 `ls` 的输出逐字节相同**，其中包含 `_sample.md`。
+
+**为什么必须对比前后两次 `ls`。** 这个脚本里有一段**会删文件**的清理逻辑：发布目录里不再出现的 slug，对应的副本会被 `fs.rm` 删掉。此刻 vault 里一篇都没标记，所以 `published` 是空的、`wanted` 是**空集合**——清理循环正好处于「把目录里所有 `.md` 都判为多余」的临界状态，**唯一挡住它的是那行 `if (f.startsWith('_')) continue;`**。
+
+- 只断言「已标记发布: 0 篇」**完全看不出这件事**：日志逐字一样，而 `_sample.md` 已经没了——T5/T6/T7/T8 的**全部夹具**都挂在它身上，后面的任务会在莫名其妙的报错里空转很久。
+- 这是本项目里**唯一一处破坏性操作**，跑之前先记快照是唯一能发现它的办法。
+- 若两次 `ls` 不同（尤其是少了 `_sample.md`），去查 `sync-vault.mjs` 清理循环里那行下划线守卫。
 
 若报 `vault 目录不存在`，检查 `blog.config.json` 里的 `vaultPath` 与磁盘上的实际路径是否逐字符一致。
 
-- [ ] **Step 5: 验证幂等性**
+- [ ] **Step 5: 验证脚本可重复执行（**这一步不验证幂等性**，见下）**
 
 ```bash
 npm run build
 npm run sync
 ```
 
-预期：第二次 `npm run sync` 输出「新增 0 / 更新 0」（因为还没有已发布的文章，与第一次相同）。这一步是验证脚本不报错、可重复执行。
+预期：第二次 `npm run sync` 输出「新增 0 / 更新 0」。
+
+**为什么这一步不能叫「验证幂等性」——它证明不了。** 此刻 `published` 是空集，所以「新增 0 / 更新 0」**在脚本写坏了的时候也照样成立**：一个从来没写入过任何文件的脚本，第二次运行时当然还是新增 0。这是一条**没有判别力的断言**。
+
+它在这里唯一的作用是：确认脚本能重复执行、不报错、不抛异常。
+
+**真正的幂等性（第二次运行不改动任何已生成文件）与「清理逻辑真的会删」这两件事，都只有在有已发布文章之后才测得出来**，已作为 T11 的 Step 5 落实在那里——**不要因为这里写着「新增 0 / 更新 0」就以为已经验过了。**
 
 - [ ] **Step 6: 提交**
 
@@ -2924,7 +2965,53 @@ npm run sync
 
 若数量不符，看输出的「未标记 publish: true 而跳过」清单，找出漏标的文件。
 
-- [ ] **Step 5: 运行公式检查**
+- [ ] **Step 5: 验证幂等性与清理路径（这两条在 T10 阶段做不到，只能在这里做）**
+
+现在有 36 个真实文件了，两条**在 T10 时无法验证**的行为才测得出来。
+
+**5a. 幂等性：第二次运行必须一个字节都不改。**
+
+```bash
+find src/content/blog -name '*.md' | sort | xargs sha256sum > /tmp/probe-before.txt
+npm run sync
+find src/content/blog -name '*.md' | sort | xargs sha256sum > /tmp/probe-after.txt
+diff /tmp/probe-before.txt /tmp/probe-after.txt && echo '幂等：36 个文件逐字节未变'
+```
+
+预期：打印 `幂等：36 个文件逐字节未变`（`diff` 无输出、退出码 0），且 `npm run sync` 报 `新增 0 / 更新 0`。
+
+**这条和 T10 Step 5 的区别就是它存在的理由**：T10 时 `published` 是空集，「新增 0 / 更新 0」**在脚本彻底坏掉时也照样成立**。现在有 36 个真实文件，**只有真的判定了「内容没变就不写」才会是 0**。`sha256sum` 那一层更严——它连「改写了但字节相同」都不放过。
+
+**5b. 清理路径确实会删，而且只删该删的。**
+
+这一步**故意制造一次「取消发布」**。确定性挑选目标，不靠人眼：
+
+```bash
+SLUG=$(ls -1 src/content/blog/*.md | sort | head -1 | xargs -n1 basename | sed 's/\.md$//')
+SRC=$(grep -m1 '^sourcePath:' "src/content/blog/$SLUG.md" | sed 's/^sourcePath: *"//; s/"$//')
+echo "目标 slug: $SLUG"
+echo "vault 源文件: $SRC"
+```
+
+**去改 vault 里那个 `$SRC`**，把 `publish: true` 改成 `publish: false`，然后：
+
+```bash
+npm run sync
+echo "剩余文章数: $(ls -1 src/content/blog/*.md | wc -l)"        # 应为 35
+test -f "src/content/blog/$SLUG.md" && echo '!! 该篇没被删掉' || echo '清理生效：该篇已移除'
+```
+
+预期：`已删除: 1 篇`；文章数 **35**；打印 `清理生效：该篇已移除`。
+
+**最后把 `$SRC` 改回 `publish: true` 并重跑 `npm run sync`**，确认文章数回到 **36**，且该篇的 `sha256sum` 与 `/tmp/probe-before.txt` 里那一行**逐字符相同**（位置相同、哈希相同）。
+
+**为什么这条不能省。** 这是全项目**唯一一处破坏性操作**，而且到这一步为止**从没被执行过**：
+
+- 一次都没跑过的删除代码，和一段注释没有区别。它可能**永远不删**（`wanted` 的比较写反、`existing` 取在了写入之后、slug 算错导致集合对不上），也可能**删过头**。
+- **它删的不只是仓库里的文件**：发布模型是显式 opt-in，一篇笔记取消标记后如果副本还留在站点上，那是**私有内容继续公开可见**——不是排版问题，是内容泄露。这个项目的源 vault 里有不该公开的东西。
+- 先看 `sourcePath` 再动手，是为了确保改的是 **vault 里那个源文件**，而不是博客仓库里的副本。改错副本会在下次同步时被直接覆盖回来，**你会以为测试通过了**。
+
+- [ ] **Step 6: 运行公式检查**
 
 ```bash
 npm run check:math
@@ -2932,7 +3019,7 @@ npm run check:math
 
 预期：理想情况下「公式检查通过」。**更可能的情况是列出若干问题**——这些是源文件里真实存在的写法错误（例如孤立未闭合的 `$$`）。逐条回到 Obsidian 修正，然后重跑 `npm run sync` 与 `npm run check:math`，直到通过。
 
-- [ ] **Step 6: 构建并检查是否有 schema 错误**
+- [ ] **Step 7: 构建并检查是否有 schema 错误**
 
 ```bash
 npm run build
@@ -2940,7 +3027,7 @@ npm run build
 
 预期：构建成功。若报 `category` 校验失败，说明某个文件的目录没有匹配到 `categoryMap`，检查 `blog.config.json` 的目录拼写。
 
-- [ ] **Step 7: 截图抽查三篇**
+- [ ] **Step 8: 截图抽查三篇**
 
 ```bash
 npm run preview
@@ -2960,7 +3047,7 @@ node scripts/shot.mjs "http://localhost:4321/" real-home dark
 
 对每篇确认：标题正确、日期不是今天、分类正确、公式渲染、代码块有行号和高亮。
 
-- [ ] **Step 8: 提交**
+- [ ] **Step 9: 提交**
 
 ```bash
 git add -A
