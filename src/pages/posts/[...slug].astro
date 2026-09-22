@@ -1,0 +1,25 @@
+---
+import { getCollection, render } from 'astro:content';
+
+export async function getStaticPaths() {
+  const posts = await getCollection('blog');
+  return posts.map((post) => ({ params: { slug: post.id }, props: { post } }));
+}
+
+const { post } = Astro.props;
+const { Content, headings } = await render(post);
+---
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>{post.data.title}</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  </head>
+  <body>
+    <h1>{post.data.title}</h1>
+    <p>分类：{post.data.category} · 标签：{post.data.tags.join(', ')}</p>
+    <p>标题数：{headings.length}</p>
+    <article><Content /></article>
+  </body>
+</html>
