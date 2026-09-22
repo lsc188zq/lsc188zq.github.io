@@ -1,5 +1,7 @@
 ---
 import { getCollection, render } from 'astro:content';
+import '../../styles/global.css';
+import '../../styles/prose.css';
 
 export async function getStaticPaths() {
   const posts = await getCollection('blog');
@@ -20,6 +22,6 @@ const { Content, headings } = await render(post);
     <h1>{post.data.title}</h1>
     <p>分类：{post.data.category} · 标签：{post.data.tags.join(', ')}</p>
     <p>标题数：{headings.length}</p>
-    <article><Content /></article>
+    <article class="prose"><Content /></article>
   </body>
 </html>
