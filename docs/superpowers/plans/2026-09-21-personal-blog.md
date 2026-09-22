@@ -2310,6 +2310,12 @@ test('normalizeHeadings 不改代码块里的井号', () => {
   const md = ['## 标题', '```cpp', '#define MAXN 10', '```'].join('\n');
   assert.equal(normalizeHeadings(md), md);
 });
+
+test('normalizeHeadings 的平移量按整篇算，不按代码块切开的段落各算各的', () => {
+  const md = ['### 题目描述', '', '```cpp', 'int x;', '```', '', '#### 细节'].join('\n');
+  const out = normalizeHeadings(md);
+  assert.equal(out, ['## 题目描述', '', '```cpp', 'int x;', '```', '', '### 细节'].join('\n'));
+});
 ```
 
 - [ ] **Step 9: 实现标题平移**
@@ -2323,31 +2329,47 @@ test('normalizeHeadings 不改代码块里的井号', () => {
  * 平移而非「一律上提一级」，是因为不同文档的起始层级不一致。
  */
 export function normalizeHeadings(md) {
-  return mapText(md, (text) => {
-    const lines = text.split('\n');
-    const levels = [];
-    for (const line of lines) {
+  const segs = splitSegments(md);
+
+  // 平移量必须**按整篇**算。这里不能走 mapText —— 它是按段落回调的，
+  // 而代码块会把文档切成好几段，每段各算一次 min 就会得到**各不相同**的 shift：
+  // 「### 描述」+代码+「#### 细节」两段分别平移后都落到 H2，**相对层级被抹平**。
+  // 已实测：该输入下 mapText 版输出 `## 描述` 与 `## 细节`，`### 细节` 丢失。
+  // 博客的目录是按标题层级画的大纲，层级被抹平等于目录结构是错的。
+  const levels = [];
+  for (const seg of segs) {
+    if (seg.type !== 'text') continue;
+    for (const line of seg.content.split('\n')) {
       const m = line.match(/^(#{1,6})\s/);
       if (m) levels.push(m[1].length);
     }
-    if (levels.length === 0) return text;
+  }
+  if (levels.length === 0) return md;
 
-    const shift = 2 - Math.min(...levels);
-    if (shift === 0) return text;
+  const shift = 2 - Math.min(...levels);
+  if (shift === 0) return md;
 
-    return lines
-      .map((line) => {
-        const m = line.match(/^(#{1,6})(\s.*)$/);
-        if (!m) return line;
-        const lv = Math.min(6, Math.max(1, m[1].length + shift));
-        return '#'.repeat(lv) + m[2];
-      })
-      .join('\n');
-  });
+  return segs
+    .map((seg) =>
+      seg.type === 'text'
+        ? seg.content
+            .split('\n')
+            .map((line) => {
+              const m = line.match(/^(#{1,6})(\s.*)$/);
+              if (!m) return line;
+              const lv = Math.min(6, Math.max(1, m[1].length + shift));
+              return '#'.repeat(lv) + m[2];
+            })
+            .join('\n')
+        : seg.content
+    )
+    .join('\n');
 }
 ```
 
-`mapText` 已经剥离了代码段，所以这里不必再判断围栏。
+`splitSegments` 已经把代码段摘出来了，所以这里不必再判断围栏——但**必须先切段、再统算 min、最后回填**，顺序反了就是我刚说的那个缺陷。
+
+（级别被 clamp 到 1~6：若一篇文档横跨 6 个以上层级，最深的几级会被压到一起。**已知且接受**——这种事在真实笔记里没出现过，且压缩只影响大纲最深处。）
 
 - [ ] **Step 10: 运行测试**
 
@@ -2355,7 +2377,7 @@ export function normalizeHeadings(md) {
 node --test test/
 ```
 
-预期：13 个测试全部 PASS。
+预期：14 个测试全部 PASS。
 
 - [ ] **Step 11: 写 slug 与摘要的失败测试**
 
@@ -2445,7 +2467,7 @@ export function makeSlug(filename) {
     .trim()
     .replace(/\s+/g, '-')
     // URL 中有歧义的字符（# 会被当成锚点，? 会被当成查询串）+ 文件系统非法字符
-    .replace(/[<>:"/\\|?*#%\u0000-\u001f]/g, '')
+    .replace(/[\p{Cc}<>:"/\\|?*#%]/gu, '')
     .replace(/-{2,}/g, '-')
     .replace(/^-+|-+$/g, '');
 }
@@ -2496,9 +2518,13 @@ export function extractDescription(md, max = 80) {
 node --test test/
 ```
 
-预期：22 个测试全部 PASS。
+预期：23 个测试全部 PASS。
 
-> **这套测试已经预先验证过**：计划编写阶段把上述实现完整跑过一遍，22 个用例全部通过（含端到端用例）。因此若你执行时看到失败，**大概率是实现被改动过**，而不是测试本身有问题。
+> **这套测试的验证状况（如实记录）**：计划编写阶段把**原始**实现跑通过一遍（22 个用例）。**但那个实现里 `normalizeHeadings` 是错的**——它经由 `mapText` 逐段落计算平移量，代码块把文档切开后每段各算各的 `shift`，相对层级会被抹平（详见 Step 9 的注释）。
+>
+> 控制器已把它改成「先切段、按整篇统算 min、再回填」，并新增第 14 个用例专门守这个缺陷。**新实现已在全部 23 个用例上重跑通过，且新用例在旧实现上确认失败（两个方向都实测过）**。上面那个 `extractDescription` 的实现与其它函数均未改动。
+>
+> 因此若你执行时看到失败，**大概率是实现被改动过，而不是测试本身有问题**。
 
 - [ ] **Step 14: 提交**
 
