@@ -1832,10 +1832,23 @@ npm run preview
 另开终端：
 
 ```bash
-node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage({viewport:{width:1100,height:900}});await p.goto('http://localhost:4321/posts/_sample');const f=await p.\$\$eval('details.code-fold',n=>n.length);const s=await p.\$\$eval('details.code-fold > summary',n=>n.map(x=>x.textContent));console.log('折叠块:',f,'|',s);await b.close();})"
+node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage({viewport:{width:1100,height:900}});await p.goto('http://localhost:4321/posts/_sample');const f=await p.\$\$eval('details.code-fold',n=>n.length);const s=await p.\$\$eval('details.code-fold > summary',n=>n.map(x=>x.textContent));console.log('折叠块:',f,'|',s);const ln=await p.evaluate(()=>{const el=document.querySelector('.prose pre code .line');if(!el)return {found:false};const before=getComputedStyle(el,'::before');const code=getComputedStyle(el.parentElement);return {found:true,content:before.content,counterReset:code.counterReset,lineCount:el.parentElement.querySelectorAll('.line').length};});console.log('行号 ::before:',JSON.stringify(ln));await b.close();})"
 ```
 
-预期：`折叠块: 1 | ['展开全部（N 行）']`，N ≥ 41。
+预期：`折叠块: 1 | ['展开全部（N 行）']`，**N 必须 ≥ 49**；再加一行
+
+```
+行号 ::before: {"found":true,"content":"counter(line)","counterReset":"line 0","lineCount":49}
+```
+
+三个判据：
+
+- **`N ≥ 49`，不是 `N ≥ 41`。** 那个代码块本身就是 **49 行**（Step 4 的 `#include` 到最后的 `}`，数一遍就是 49），渲染出来的 `.line` 只可能 **≥ 49**（末尾空行可能多出一个）。写 `≥ 41` 的话，**一个只渲染出 41 行的截断代码块照样通过**——而阈值是 40，41 也满足 `> 40`，折叠块数还是 1，**前两条断言全都看不出来**。下界必须贴着实际行数写。
+- **`found` 必须是 `true`**：说明 Shiki 真的产出了 `.line` 元素。`false` 就说明行号方案的前提不成立（此时 `折叠块:` 多半也会是 0 或 1 以外的值）。
+- **`content` 必须含 `counter(line)`，`counterReset` 必须含 `line`**：这两条一起才证明**行号真的会渲染出来**。行号是纯 CSS 计数器生成的，**不在 DOM 里**，所以它坏掉时——`.prose pre code .line::before` 这条规则没匹配上、或者 `counter-reset: line` 忘了写——**页面上什么都不会显示，而 `折叠块:`、`卡片数`、截图上"有没有行号"之外的一切断言全都是绿的**。截图那张是人眼看的，这条是自动的。
+  - 不要断言 `counterReset` 精确等于 `line`：Chromium 的计算值是 `line 0`。判据是**含 `line`**，不是等于。
+
+**注意这条探针跑在 Step 1 的 CSS 已经落地之后**，所以它此刻是绿的；若要确认它有判别力，把 `.line::before` 那条规则的 `content: counter(line)` 临时注释掉，`content` 会变成 `none`。
 
 - [ ] **Step 6: 截图确认行号与主题配色**
 
@@ -1849,10 +1862,16 @@ node scripts/shot.mjs "http://localhost:4321/posts/_sample" code light
 - [ ] **Step 7: 验证复制按钮（本任务此前唯一没有验证的交付物）**
 
 ```bash
-node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage();await p.addInitScript(()=>{window.__copied=null;if(navigator.clipboard)navigator.clipboard.writeText=async t=>{window.__copied=t;};});await p.goto('http://localhost:4321/posts/_sample');const n=await p.\$\$eval('.copy-btn',x=>x.length);await p.locator('.copy-btn').first().click();await p.waitForTimeout(150);const r=await p.evaluate(()=>({copied:window.__copied,label:document.querySelector('.copy-btn').textContent}));console.log('复制按钮数:',n,'| 按钮文字:',r.label,'| 复制到字符数:',r.copied?r.copied.length:null);console.log('首行:',JSON.stringify((r.copied||'').split(String.fromCharCode(10))[0]));console.log('首行是否以数字开头(即混进了行号):',/^(\\s*)\\d/.test(r.copied||''));await b.close();})"
+node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage();await p.addInitScript(()=>{window.__copied=null;if(navigator.clipboard)navigator.clipboard.writeText=async t=>{window.__copied=t;};});await p.goto('http://localhost:4321/posts/_sample');const n=await p.\$\$eval('.copy-btn',x=>x.length);await p.locator('.copy-btn').first().click();await p.waitForTimeout(150);const r=await p.evaluate(()=>({copied:window.__copied,label:document.querySelector('.copy-btn').textContent}));console.log('复制按钮数:',n,'| 按钮文字:',r.label,'| 复制到字符数:',r.copied?r.copied.length:null);console.log('首行:',JSON.stringify((r.copied||'').split(String.fromCharCode(10))[0]));console.log('首行是否以数字开头(即混进了行号):',/^(\\s*)\\d/.test(r.copied||''));await p.evaluate(()=>{navigator.clipboard.writeText=async()=>{throw new Error('denied');};});await p.locator('.copy-btn').first().click();await p.waitForTimeout(150);console.log('写剪贴板抛错后按钮文字:',await p.textContent('.copy-btn'));await b.close();})"
 ```
 
-预期：`复制按钮数: 2`（两个代码块各一个）｜`按钮文字: 已复制`｜`复制到字符数` 大于 0｜`首行` 是 `"#include <bits/stdc++.h>"`｜`首行是否以数字开头(即混进了行号): false`。
+预期：`复制按钮数: 2`（两个代码块各一个）｜`按钮文字: 已复制`｜`复制到字符数` 大于 0｜`首行` 是 `"#include <bits/stdc++.h>"`｜`首行是否以数字开头(即混进了行号): false`｜**`写剪贴板抛错后按钮文字: 复制失败`**。
+
+**最后那条守的是「失败分支」，而前面几条一条都守不住它。** 前面把 `navigator.clipboard.writeText` 换成了**永远成功**的桩，所以 `catch` 那条路**从头到尾没被执行过**——把 `catch` 整个删掉、或者里面写成 `btn.textContent = '已复制'`，**上面五条断言逐字节不变**。
+
+- 这条分支不是装饰：剪贴板 API 在**非安全上下文**（`http://` 非 localhost）、**用户拒绝权限**、**页面失焦**时都会抛错，而博客是 `https://lsc188zq.github.io`，**用户从 http 链接跳进来或浏览器策略收紧时就会走到这里**。
+- 做法：把桩换成一个**抛错的**桩，再点一次同一个按钮。150 ms 足够 `await` 失败并落到 `catch`——注意上面那个 `setTimeout(…, 1500)` 会把文字复位成 `复制`，所以这两次点击必须在前一次点击的 1500 ms 之内完成，探针的时序已经保证（累计约 350 ms）。
+- 这条同时验证了**按钮被点过一次之后仍然可点**。
 
 **为什么这条不能省。** 行号是纯 CSS 计数器（`content: counter(line)`）生成的，**不是 DOM 文本**，所以 `code.textContent` 天然不含行号——但这恰恰是最容易被后人改坏的地方：哪天有人把行号改成真实的 DOM 元素，复制出来的每一行前面就会多一个数字，**而这种回归在截图里完全看不出来**（截图里两者长得一模一样）。这条探针一次验证三件事：按钮存在、点击真的调用了剪贴板、复制内容不含行号。
 
