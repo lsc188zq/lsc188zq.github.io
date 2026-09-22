@@ -57,14 +57,16 @@ const toc = headings.filter((h) => h.depth === 2 || h.depth === 3);
 <script>
   const links = Array.from(document.querySelectorAll('.toc-link'));
 
-  // 缓存每个标题的**文档绝对位置**。getBoundingClientRect().top + scrollY 与当前
-  // 滚动位置无关，所以只需在加载和 resize 时各算一次——scroll 回调里就不读布局了。
+  // 标题位置与最大滚动量只在 measure() 里读一次并缓存：scroll 回调里再读
+  // scrollHeight 会强制同步布局，而滚动回调每帧都会跑。
   let tops = [];
+  let maxScroll = 0;
   const measure = () => {
     tops = links.map((l) => {
       const el = document.getElementById(l.dataset.target);
       return el ? el.getBoundingClientRect().top + scrollY : Infinity;
     });
+    maxScroll = document.documentElement.scrollHeight - innerHeight;
   };
 
   const LINE = 0.3; // 参考线取视口高度的 30%
@@ -75,7 +77,6 @@ const toc = headings.filter((h) => h.depth === 2 || h.depth === 3);
     // 只写 scrollY + innerHeight >= scrollHeight - 2 的话，当文章总高不超过视口时
     // 它**恒为真**——读者明明在一篇短随笔的顶部，目录却点亮最后一节，
     // 与他实际所在的位置不符。这和上面那条"末尾够不到参考线"是同一类缺陷，只是方向相反。
-    const maxScroll = document.documentElement.scrollHeight - innerHeight;
     const atBottom = maxScroll > 0 && scrollY >= maxScroll - 2;
     // 滚到底时，末尾几节的标题因为**无处可滚**，永远到不了参考线——没有这一条，
     // 目录里最后几节永远高亮不了，点它们的链接也毫无反应。
@@ -91,4 +92,10 @@ const toc = headings.filter((h) => h.depth === 2 || h.depth === 3);
   sync();
   addEventListener('scroll', sync, { passive: true });
   addEventListener('resize', () => { measure(); sync(); });
+  // 稳定之后布局仍会位移（图片加载、按需注入的 KaTeX 样式表都会把标题往下推），
+  // 所以盯盒子而不是枚举原因（枚举必然漏掉下一种）：html 与 body 都观察，谁变触发谁。
+  // resize 监听保留——视口高度改变的是参考线位置，不一定改变盒子尺寸，观察器抓不到。
+  const ro = new ResizeObserver(() => { measure(); sync(); });
+  ro.observe(document.documentElement);
+  ro.observe(document.body);
 </script>
