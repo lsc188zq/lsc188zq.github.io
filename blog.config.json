@@ -1,0 +1,18 @@
+{
+  "vaultPath": "C:/Users/21004/Documents/Obsidian Vault",
+  "publishDirs": [
+    "OI/算法",
+    "OI/游记",
+    "文集",
+    "项目/游戏/三眼枪",
+    "学习/深度学习"
+  ],
+  "categoryMap": {
+    "OI/算法": "知识",
+    "学习/深度学习": "知识",
+    "项目/游戏/三眼枪": "项目",
+    "OI/游记": "游记",
+    "文集": "杂谈"
+  },
+  "defaultCategory": "杂谈"
+}
