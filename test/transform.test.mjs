@@ -105,7 +105,7 @@ test('makeSlug 不产生连续或首尾连字符', () => {
   assert.equal(makeSlug('  a   b  .md'), 'a-b');
 });
 
-test('extractDescription 跳过标题与代码块取第一段正文', () => {
+test('extractDescription 跳过标题与代码块取第一行正文', () => {
   const md = ['## 标题', '', '```cpp', 'int x;', '```', '', '这是第一段真正的正文内容，足够长。'].join('\n');
   assert.equal(extractDescription(md), '这是第一段真正的正文内容，足够长。');
 });
@@ -122,8 +122,13 @@ test('extractDescription 超长时截断加省略号', () => {
   assert.ok(out.endsWith('…'));
 });
 
-test('extractDescription 找不到合格段落时返回空串', () => {
-  assert.equal(extractDescription('```cpp\nint x;\n```'), '');
+test('extractDescription 跳过代码段，找不到合格行时返回空串', () => {
+  // 负路径：代码行本身足够长（14 字），所以它落空只能是「跳过代码段」造成的，
+  // 不是被 < 10 的字数门槛滤掉的。原用例用的是 'int x;'（6 字），
+  // 删掉 if (seg.type !== 'text') continue; 也照样通过——那是假防护。
+  assert.equal(extractDescription('```cpp\nint x = 12345;\n```'), '');
+  // 正对照：同一行内容去掉围栏后必须被选中，证明上面的空串不是门槛造成的
+  assert.equal(extractDescription('int x = 12345;'), 'int x = 12345;');
 });
 
 test('端到端：真实笔记形状的输入', () => {
@@ -151,4 +156,64 @@ test('端到端：真实笔记形状的输入', () => {
   assert.ok(out.includes('#define int long long'), '#define 必须原样保留');
   assert.ok(out.includes('## 思路'), '第二个标题也应上提');
   assert.equal(extractDescription(out), '给定 n 个数，求区间和。');
+});
+
+// ---- 评审修复轮补的用例：每条都对应一个具体的、实测可见的坏法 ----
+
+test('splitSegments 的闭合围栏必须与开启围栏同种字符', () => {
+  const md = ['```', 'a', '~~~', '```'].join('\n');
+  const segs = splitSegments(md);
+  assert.deepEqual(segs.map((s) => s.type), ['code']);
+});
+
+test('splitSegments 识别带前导空白的围栏', () => {
+  const md = ['正文', '   ```cpp', '   int x = 1;', '   ```', '结尾'].join('\n');
+  const segs = splitSegments(md);
+  assert.deepEqual(segs.map((s) => s.type), ['text', 'code', 'text']);
+});
+
+test('splitSegments 的闭合围栏必须不短于开启围栏、且整行只有围栏', () => {
+  // 长度：4 反引号开启的围栏里，一行 3 反引号按 CommonMark 不构成闭合
+  const long = ['````', '```', '正文里的 \\(x\\)', '````'].join('\n');
+  assert.deepEqual(splitSegments(long).map((s) => s.type), ['code']);
+  // 后果：那行 3 反引号若被当成闭合，后面的内容就落到正文段被静默改写
+  assert.equal(normalizeMath(long), long);
+  // info string：带 info string 的整行（如 '```js'）不构成闭合
+  const info = ['```', 'x', '```js', '```'].join('\n');
+  assert.deepEqual(splitSegments(info).map((s) => s.type), ['code']);
+});
+
+test('mapText 恒等回调下多段往返保形', () => {
+  const md = ['正文一', '```cpp', 'int x = 1;', '```', '正文二'].join('\n');
+  assert.equal(mapText(md, (t) => t), md);
+});
+
+test('normalizeMath 的同种定界符之间不互相吞并（非贪婪）', () => {
+  assert.equal(normalizeMath('\\[a\\]\n\n\\[b\\]'), '$$a$$\n\n$$b$$');
+  assert.equal(normalizeMath('\\(a\\) 与 \\(b\\)'), '$a$ 与 $b$');
+});
+
+test('makeSlug 的后处理：折叠连字符、剥除首尾、只剥末尾的 .md', () => {
+  assert.equal(makeSlug('a - b.md'), 'a-b');
+  assert.equal(makeSlug('-a-.md'), 'a');
+  assert.equal(makeSlug('note.md.bak'), 'note.md.bak');
+});
+
+test('extractDescription 的 10 字门槛在边界两侧的行为', () => {
+  // 正好 10 字：接受（判定是「< 10 才跳过」）
+  const ten = '一二三四五六七八九十';
+  assert.equal(extractDescription(ten), ten);
+  // 9 字：跳过，结果落回后面那一行
+  const nine = '一二三四五六七八九';
+  const longer = '这是一行足够长的正文内容。';
+  assert.equal(extractDescription(nine + '\n' + longer), longer);
+});
+
+test('extractDescription 跳过引用行与块级公式，并剥掉 LaTeX 命令', () => {
+  const md = [
+    '> 引用行内容足够长也不该被选中。',
+    '$$这是块级公式也不该被选中。$$',
+    '给定 \\log n 的复杂度说明，足够长。',
+  ].join('\n');
+  assert.equal(extractDescription(md), '给定 n 的复杂度说明，足够长。');
 });

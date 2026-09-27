@@ -135,8 +135,8 @@ export function makeSlug(filename) {
 }
 
 /**
- * 取正文第一个合格段落作为摘要，供首页卡片与 SEO 使用。
- * 标题、代码块、引用、列表、表格、图片、块级公式都不算合格段落。
+ * 取正文第一个合格行作为摘要，供首页卡片与 SEO 使用。
+ * 标题、代码块、引用、列表、表格、图片、块级公式都不算合格行。
  */
 export function extractDescription(md, max = 80) {
   const segs = splitSegments(md);
@@ -159,7 +159,7 @@ export function extractDescription(md, max = 80) {
         .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
         .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
         // 公式：只去掉 $ 定界符与 LaTeX 命令，保留内容。
-        // 整段删掉会留下「给定  个数」这样的双空格残迹，卡片上很难看。
+        // 整行删掉会留下「给定  个数」这样的双空格残迹，卡片上很难看。
         .replace(/\$+/g, '')
         .replace(/\\[a-zA-Z]+/g, '')
         .replace(/[*_`~]/g, '')
