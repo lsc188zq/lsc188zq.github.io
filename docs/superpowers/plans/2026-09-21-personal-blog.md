@@ -2163,7 +2163,7 @@ node --test
 
 预期：FAIL，报 `Cannot find module '../scripts/lib/transform.mjs'`。
 
-> **命令不要带目录参数。** 本机实测（Node v22.13.0，Windows）：`node --test test/` 会把 `test/` 当成入口文件加载，报 `Cannot find module '<仓库>/test'`、退出码 1——**换一个全新空目录同样复现**，所以不是本仓库的问题。裸 `node --test` 才会按 Node 默认规则发现 `test/*.test.mjs`。**上面这条预期报文也因此改对了**：真出错时根本走不到 `import` 那一层。
+> **命令不要带目录参数。** 本机实测（Node v22.13.0，Windows）：`node --test test/` 会把 `test/` 当成入口文件加载，报 `Cannot find module '<仓库>/test'`、退出码 1——**换一个全新空目录同样复现**，所以不是本仓库的问题。裸 `node --test` 才会按 Node 默认规则发现 `test/*.test.mjs`。**上面这条预期报文只在新命令下成立**：新命令下删掉 `transform.mjs`，报的正好是 import 那一层的错——`ERR_MODULE_NOT_FOUND: Cannot find module '…/scripts/lib/transform.mjs'`（退出码 1）；而**旧命令在更早的地方就报「找不到目录」，压根走不到 import 那一层**。
 >
 > `package.json` 的 `"test"` 脚本自脚手架起就写作 `node --test test/`，**一直是坏的**，已一并改成 `node --test`。T9 后续的 4 条测试命令同理，都不带目录参数。**判别力实测过**：裸形式在注入一条必失败用例后退出码变 1；CI 在 Linux 上未实测，但裸形式两边都对。
 
