@@ -11,8 +11,12 @@ export function splitSegments(md) {
   let buf = [];
   let inFence = false;
   let fenceChar = '';
+  let fenceLen = 0;
 
   const fenceMatch = (line) => line.match(/^\s*(`{3,}|~{3,})/);
+  // 闭合围栏：整行只有围栏、允许首尾空白，不能带 info string。
+  // 与开启围栏分开判定——'```js' 这种整行不是纯围栏，不构成闭合。
+  const fenceClose = (line) => line.match(/^\s*(`{3,}|~{3,})\s*$/);
 
   for (const line of lines) {
     const m = fenceMatch(line);
@@ -24,14 +28,18 @@ export function splitSegments(md) {
       }
       inFence = true;
       fenceChar = m[1][0];
+      fenceLen = m[1].length;
       buf.push(line);
       continue;
     }
 
     if (inFence) {
       buf.push(line);
-      // 闭合围栏必须与开启围栏同种字符
-      if (m && m[1][0] === fenceChar) {
+      const c = fenceClose(line);
+      // 闭合围栏必须：与开启围栏同种字符，且不短于开启围栏（CommonMark）。
+      // 少这两条里的任意一条，围栏内的内容就会被提前切成正文段，
+      // 随之被 normalizeMath 之类的改写静默破坏——改坏了代码，却不报错。
+      if (c && c[1][0] === fenceChar && c[1].length >= fenceLen) {
         segs.push({ type: 'code', content: buf.join('\n') });
         buf = [];
         inFence = false;
