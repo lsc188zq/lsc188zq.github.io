@@ -116,7 +116,7 @@
     "check": "astro check",
     "sync": "node scripts/sync-vault.mjs",
     "check:math": "node scripts/check-math.mjs",
-    "test": "node --test test/"
+    "test": "node --test"
   },
   "dependencies": {
     "astro": "^7.3.3",
@@ -2158,10 +2158,14 @@ test('mapText 只改正文不动代码', () => {
 - [ ] **Step 2: 运行测试确认失败**
 
 ```bash
-node --test test/
+node --test
 ```
 
 预期：FAIL，报 `Cannot find module '../scripts/lib/transform.mjs'`。
+
+> **命令不要带目录参数。** 本机实测（Node v22.13.0，Windows）：`node --test test/` 会把 `test/` 当成入口文件加载，报 `Cannot find module '<仓库>/test'`、退出码 1——**换一个全新空目录同样复现**，所以不是本仓库的问题。裸 `node --test` 才会按 Node 默认规则发现 `test/*.test.mjs`。**上面这条预期报文也因此改对了**：真出错时根本走不到 `import` 那一层。
+>
+> `package.json` 的 `"test"` 脚本自脚手架起就写作 `node --test test/`，**一直是坏的**，已一并改成 `node --test`。T9 后续的 4 条测试命令同理，都不带目录参数。**判别力实测过**：裸形式在注入一条必失败用例后退出码变 1；CI 在 Linux 上未实测，但裸形式两边都对。
 
 - [ ] **Step 3: 实现段落切分**
 
@@ -2229,7 +2233,7 @@ export function mapText(md, fn) {
 - [ ] **Step 4: 运行测试确认通过**
 
 ```bash
-node --test test/
+node --test
 ```
 
 预期：4 个测试全部 PASS。
@@ -2282,7 +2286,7 @@ export function normalizeMath(md) {
 - [ ] **Step 7: 运行测试**
 
 ```bash
-node --test test/
+node --test
 ```
 
 预期：8 个测试全部 PASS。
@@ -2381,7 +2385,7 @@ export function normalizeHeadings(md) {
 - [ ] **Step 10: 运行测试**
 
 ```bash
-node --test test/
+node --test
 ```
 
 预期：14 个测试全部 PASS。
@@ -2456,7 +2460,11 @@ test('端到端：真实笔记形状的输入', () => {
 });
 ```
 
-最后一个用例是本任务最有价值的测试：它同时检验了公式归一、标题平移、**代码块跳过**三件事的相互作用，而这正是同步脚本最容易出错的地方。`#define` 和代码注释里的 `\(` 如果被改写，说明 `mapText` 的分段逻辑有漏洞。
+最后一个用例守的是**公式归一 × 代码块跳过**的相互作用：`#define` 和代码注释里的 `\(` 如果被改写，说明 `mapText` 的分段逻辑有漏洞——这一层它确实守得住。
+
+**但它守不住标题平移。** 它的两个标题都是 H3、深度相同，而「按整篇算 min」与「逐段各算 min」在这种输入上结果完全一致，所以把错的那版实现注进去，**它照样通过**。守住标题平移的是 Step 8 那条「平移量按整篇算，不按代码块切开的段落各算各的」——T9 实现者实测：注入错版后**只有它变红**。
+
+> 这段措辞原写作「最后一个用例是本任务最有价值的测试：它同时检验了公式归一、标题平移、代码块跳过三件事」。**那句话不成立**，是 T9 施工时实测出来的（端到端用例在错版实现下依然全绿）。记在这里，免得后来者以为它兼守三件事。
 
 - [ ] **Step 12: 实现 slug 与摘要**
 
@@ -2522,7 +2530,7 @@ export function extractDescription(md, max = 80) {
 - [ ] **Step 13: 运行全部测试**
 
 ```bash
-node --test test/
+node --test
 ```
 
 预期：23 个测试全部 PASS。
