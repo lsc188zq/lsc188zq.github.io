@@ -172,3 +172,41 @@ export function extractDescription(md, max = 80) {
   }
   return '';
 }
+
+/**
+ * 剥离正文开头的 Obsidian 标签行（如 `#DP #单调队列`），返回标签数组与剩余正文。
+ *
+ * 判据：整行 trim 后按空白切分，**每个 token 都形如 `#` + 非空白非 `#` 的字符**才算标签行。
+ * 于是两种「以 # 开头但不是标签」的行不会被误吃：
+ *   - `## 题目描述`：切出来第二个 token 是 `题目描述`，不以 `#` 开头；
+ *   - `#include <iostream>`：第二个 token 是 `<iostream>`，不以 `#` 开头。
+ *
+ * 连续多行标签行一并吃掉；标签按出现顺序**去重**——同一篇里出现两次同名标签，
+ * 会让标签云显示的篇数与标签详情页列出的篇数对不上。
+ *
+ * **没有标签行时 body 与入参逐字节相同**，同步脚本靠这条保证幂等（第二次运行必须
+ * 产出同样内容，否则每次都会判定「有更新」而重写全部文件）。
+ * 注意 split('\n') 会把 CRLF 的 `\r` 留在各行末尾、join('\n') 又原样拼回，
+ * 所以换行符不被改动——**不要**改成 split(/\r?\n/)。
+ */
+export function splitLeadingTags(md) {
+  const lines = md.split('\n');
+  let i = 0;
+  while (i < lines.length && lines[i].trim() === '') i++;
+
+  const tags = [];
+  const seen = new Set();
+  let j = i;
+  while (j < lines.length) {
+    const tokens = lines[j].trim().split(/\s+/).filter(Boolean);
+    if (tokens.length === 0 || !tokens.every((t) => /^#[^\s#]/.test(t))) break;
+    for (const t of tokens) {
+      const name = t.slice(1);
+      if (!seen.has(name)) { seen.add(name); tags.push(name); }
+    }
+    j++;
+  }
+
+  if (j === i) return { tags: [], body: md };
+  return { tags, body: lines.slice(0, i).concat(lines.slice(j)).join('\n') };
+}

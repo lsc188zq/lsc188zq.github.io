@@ -7,6 +7,7 @@ import {
   normalizeHeadings,
   makeSlug,
   extractDescription,
+  splitLeadingTags,
 } from '../scripts/lib/transform.mjs';
 
 test('splitSegments 把代码围栏切出来', () => {
@@ -216,4 +217,67 @@ test('extractDescription 跳过引用行与块级公式，并剥掉 LaTeX 命令
     '给定 \\log n 的复杂度说明，足够长。',
   ].join('\n');
   assert.equal(extractDescription(md), '给定 n 的复杂度说明，足够长。');
+});
+
+// ---- T9 Part 2：splitLeadingTags（Obsidian 标签行剥离）----
+// 夹具是手写字符串，不是任何真实笔记的正文（真笔记可能含真实姓名，且会把测试与 vault 内容耦合）。
+// T8 的 CRLF 与 T9 的开头空行是这两条的承重点，别把它们「顺手」改掉。
+
+test('splitLeadingTags 剥离首行标签，正文从下一行原样开始', () => {
+  const md = '#DP #单调队列\n## 题目描述\n\n正文';
+  const r = splitLeadingTags(md);
+  assert.deepEqual(r.tags, ['DP', '单调队列']);
+  assert.equal(r.body, '## 题目描述\n\n正文');
+});
+
+test('splitLeadingTags 不把 Markdown 标题行当成标签', () => {
+  const md = '## 题目描述\n\n正文';
+  const r = splitLeadingTags(md);
+  assert.deepEqual(r.tags, []);
+  assert.equal(r.body, md);
+});
+
+test('splitLeadingTags 不把 #include 代码行当成标签', () => {
+  const md = '#include <iostream>\nint main(){}';
+  const r = splitLeadingTags(md);
+  assert.deepEqual(r.tags, []);
+  assert.equal(r.body, md);
+});
+
+test('splitLeadingTags 的标签名不带尾随空格', () => {
+  const r = splitLeadingTags('#树形DP \n正文');
+  assert.deepEqual(r.tags, ['树形DP']);
+  assert.equal(r.body, '正文');
+});
+
+test('splitLeadingTags 对同名标签去重', () => {
+  const r = splitLeadingTags('#DP #DP #DP\n正文');
+  assert.deepEqual(r.tags, ['DP']);
+  assert.equal(r.body, '正文');
+});
+
+test('splitLeadingTags 连续多行标签一并剥离，按出现顺序编号', () => {
+  const r = splitLeadingTags('#A #B\n#C\n正文');
+  assert.deepEqual(r.tags, ['A', 'B', 'C']);
+  assert.equal(r.body, '正文');
+});
+
+test('splitLeadingTags 保留标签行之前的开头空行', () => {
+  const r = splitLeadingTags('\n\n#A\n正文');
+  assert.deepEqual(r.tags, ['A']);
+  assert.equal(r.body, '\n\n正文');
+});
+
+test('splitLeadingTags 保留 CRLF 换行不被改写', () => {
+  const r = splitLeadingTags('#A\r\n\r\n正文\r\n');
+  assert.deepEqual(r.tags, ['A']);
+  assert.equal(r.body, '\r\n正文\r\n');
+});
+
+test('splitLeadingTags 无标签行时 body 与入参逐字节相同', () => {
+  // 开头那个空行是这条的承重点：早返回若写成 body: md.trim()，只有这条会红。
+  const md = '\n## 单调队列\n\n正文一段。\n\n```cpp\n#include <iostream>\nint main(){}\n```\n';
+  const r = splitLeadingTags(md);
+  assert.deepEqual(r.tags, []);
+  assert.equal(r.body, md);
 });
