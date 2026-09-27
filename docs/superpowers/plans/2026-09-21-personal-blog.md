@@ -3056,7 +3056,63 @@ npm run build
 
 预期：构建成功。若报 `category` 校验失败，说明某个文件的目录没有匹配到 `categoryMap`，检查 `blog.config.json` 的目录拼写。
 
-- [ ] **Step 8: 截图抽查三篇**
+- [ ] **Step 8: 验证标签页在 36 篇语料下真的在过滤**
+
+**为什么只能在此时做**：T2–T10 期间全库只有 `_sample.md` 一篇。那时 `/tags/测试`、`/tags/公式`、`/tags/知识` 三个页面渲染的是同一张卡片——**「过滤生效」与「过滤被整个删掉」的产物逐字节相同**。T8 的实现者用变异实验实测过：把 `[tag].astro` 的 filter 换成 `() => true`（**完全忽略名字**），每个生成页面与正确实现逐字节一致，**所有断言全绿**。那是**射程**问题（断言测的地方和要防的缺陷不在同一处），成因是**语料规模**。36 篇到位后它才显形——所以这条检查的落点只能是这里。
+
+把下面的脚本写到 `.superpowers/sdd/2026-09-21-personal-blog/probe-tag-filter.mjs`（**不要写进仓库**，那个目录被 `.gitignore` 覆盖），先 `npm run preview`，另开终端再 `node` 跑它：
+
+```js
+// 验证标签页真的在过滤。语料只有一篇时这件事根本测不出来（见计划 T11 Step 8 的说明）。
+import { chromium } from 'playwright-core';
+
+const BASE = 'http://localhost:4321';
+const browser = await chromium.launch({ channel: 'msedge' });
+const p = await browser.newPage();
+let bad = 0;
+const check = (name, ok) => { if (!ok) bad++; console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}`); };
+
+// 1. 总览页：总篇数 + 每个标签的篇数。这一份来自 index.astro 的 counts，
+//    与 [tag].astro 的 filter 是两条不同的代码路径，所以可以互相对照。
+await p.goto(`${BASE}/tags`);
+const sub = await p.textContent('.page-sub');
+const total = Number(sub.match(/(\d+)\s*篇文章/)[1]);
+const items = await p.$$eval('.cloud-item', (ns) => ns.map((n) => ({
+  name: n.querySelector('.cloud-name').textContent.replace(/^#/, ''),
+  count: Number(n.querySelector('.cloud-count').textContent),
+})));
+
+check(`总览页报的总篇数 === 36（读到 ${total}）`, total === 36);
+check(`标签数 > 0（读到 ${items.length}）`, items.length > 0);
+// 标签含 `/` 时，PostCard 的 encodeURIComponent 会给出 /tags/C%2FC%2B%2B，
+// 而 Astro 按原始字符串建目录（tags/C/C++.html）——两者分叉，芯片静默 404。
+// category 是固定枚举（含 / 会在内容校验时直接报错），只有 tags 需要这条。
+check(`没有标签含 /（共 ${items.length} 个）`, items.every((i) => !i.name.includes('/')));
+
+// 2. 判别力前提：过滤若被整个删掉，每个详情页都会列出**全部** total 篇。
+//    所以必须存在一个不覆盖全部文章的标签，否则下面那组断言区分不出好坏
+//    —— T8 的变异实验 M8 就是这么漏过去的。
+const min = items.reduce((a, b) => (b.count < a.count ? b : a), items[0]);
+check(`存在不覆盖全部文章的标签（最少的是「${min.name}」= ${min.count}，总 ${total}）`, min.count < total);
+
+// 3. 逐个详情页核对卡片数 === 总览页报的篇数。取最少、最多、第一个，按名字去重。
+const picks = [...new Map([min, items[0], items[items.length - 1]].map((x) => [x.name, x])).values()];
+for (const it of picks) {
+  await p.goto(`${BASE}/tags/${encodeURIComponent(it.name)}`);
+  const cards = await p.$$eval('.card', (x) => x.length);
+  check(`/tags/${it.name} 卡片数 === ${it.count}（读到 ${cards}）`, cards === it.count);
+}
+
+await browser.close();
+console.log(bad ? `探针失败：${bad} 条` : '全部通过');
+if (bad) process.exit(1);
+```
+
+预期：全部 PASS。
+
+**这条也要求自证判别力**：把 `src/pages/tags/[tag].astro` 里 filter 的 `p.data.tags.includes(tag) || p.data.category === tag` 改成 `true`，重新 `npm run build` 并重跑本脚本，**必须看到第 2 条与第 3 条变红**（详情页会列出全部 36 篇，而总览页报的仍是各标签的真实篇数）。然后还原、重建、再跑一遍确认全绿。**看不到红就说明这条验证没有判别力，不要以「全绿」收尾。**
+
+- [ ] **Step 9: 截图抽查三篇**
 
 ```bash
 npm run preview
@@ -3076,7 +3132,7 @@ node scripts/shot.mjs "http://localhost:4321/" real-home dark
 
 对每篇确认：标题正确、日期不是今天、分类正确、公式渲染、代码块有行号和高亮。
 
-- [ ] **Step 9: 提交**
+- [ ] **Step 10: 提交**
 
 ```bash
 git add -A
