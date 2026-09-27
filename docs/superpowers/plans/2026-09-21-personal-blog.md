@@ -2428,8 +2428,13 @@ test('extractDescription 超长时截断加省略号', () => {
   assert.ok(out.endsWith('…'));
 });
 
-test('extractDescription 找不到合格段落时返回空串', () => {
-  assert.equal(extractDescription('```cpp\nint x;\n```'), '');
+test('extractDescription 跳过代码段，找不到合格行时返回空串', () => {
+  // 负路径：代码行本身足够长（14 字），所以它落空只能是「跳过代码段」造成的，
+  // 不是被 < 10 的字数门槛滤掉的。原用例用的是 'int x;'（6 字），
+  // 删掉 if (seg.type !== 'text') continue; 也照样通过——那是假防护。
+  assert.equal(extractDescription('```cpp\nint x = 12345;\n```'), '');
+  // 正对照：同一行内容去掉围栏后必须被选中，证明上面的空串不是门槛造成的
+  assert.equal(extractDescription('int x = 12345;'), 'int x = 12345;');
 });
 
 test('端到端：真实笔记形状的输入', () => {
