@@ -2657,7 +2657,7 @@ export async function fileMtimeDate(fullPath) {
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import matter from 'gray-matter';
-import { normalizeMath, normalizeHeadings, makeSlug, extractDescription } from './lib/transform.mjs';
+import { normalizeMath, normalizeHeadings, makeSlug, extractDescription, splitLeadingTags } from './lib/transform.mjs';
 import { listMarkdown, gitFirstCommitDate, fileMtimeDate } from './lib/vault.mjs';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
@@ -2722,7 +2722,11 @@ for (const rel of candidates) {
     continue;
   }
 
-  const body = normalizeHeadings(normalizeMath(parsed.content));
+  // 标签行在正规化之前剥掉。今天的两个正规化函数都不会碰这一行
+  // （normalizeMath 只改 \( \) 与 \[ \]；normalizeHeadings 要求 `#` 后有空格才当标题），
+  // 所以先后顺序今天不影响结果——先剥是为了让「正文」进入这两个函数时已经是干净的正文。
+  const { tags: vaultTags, body: rawBody } = splitLeadingTags(parsed.content);
+  const body = normalizeHeadings(normalizeMath(rawBody));
 
   const filename = path.basename(rel);
   const title = parsed.data.title ?? filename.replace(/\.md$/i, '');
@@ -2739,7 +2743,7 @@ for (const rel of candidates) {
       title,
       date,
       category: parsed.data.category ?? categoryFor(rel),
-      tags: parsed.data.tags ?? [],
+      tags: parsed.data.tags ?? vaultTags,
       description: parsed.data.description ?? extractDescription(body),
       sourcePath: rel,
       slug: parsed.data.slug,
@@ -2845,6 +2849,9 @@ ls -1 src/content/blog/
 ```
 
 预期：输出「已标记发布: 0 篇」，随后列出所有未标记的文件；且**两次 `ls` 的输出逐字节相同**，其中包含 `_sample.md`。
+
+**但这一步看不到标签剥离的接线。** `splitLeadingTags` 的调用点在 `publish !== true` 的 `continue` **之后**，而此刻 36 篇一篇都没标记，`published` 是空集——那行代码**一次都不会执行**。它的**单元用例**在 T9（9 条，含 CRLF 保留与「`#include` 不被误吃」两条边界），但「`sync-vault.mjs` 真的调用了它」这件事**在本任务里无法验证**，这是一条如实记录的盲区，不是遗漏。
+**已列为 T11 的必查项**：T11 给 36 篇加上标记之后，要确认 ① 生成的 26 篇里 `tags:` 非空、② 没有一篇的正文以标签行开头、③ 原先那 8 篇的摘要不再是标签串。
 
 
 **这个「临界状态」还有第二条到达路径，而且更危险。** `vaultPath` 写错时 `listMarkdown` 是**静默跳过**的（`vault.mjs` 里 `catch { return; }`），`candidates` 同样是空数组、`wanted` 同样空——但这一次目录里躺着的是**已经生成好的全部文章**，清理循环会把它们一次删光。所以 Step 3 的清理循环里加了一道守卫：**`candidates.length === 0` 时整段清理跳过，并打印 `[已跳过清理]`**。两条守卫各挡一个场景，**不能互相替代**：
