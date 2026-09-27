@@ -2185,8 +2185,12 @@ export function splitSegments(md) {
   let buf = [];
   let inFence = false;
   let fenceChar = '';
+  let fenceLen = 0;
 
   const fenceMatch = (line) => line.match(/^\s*(`{3,}|~{3,})/);
+  // 闭合围栏：整行只有围栏、允许首尾空白，不能带 info string。
+  // 与开启围栏分开判定——'```js' 这种整行不是纯围栏，不构成闭合。
+  const fenceClose = (line) => line.match(/^\s*(`{3,}|~{3,})\s*$/);
 
   for (const line of lines) {
     const m = fenceMatch(line);
@@ -2198,14 +2202,18 @@ export function splitSegments(md) {
       }
       inFence = true;
       fenceChar = m[1][0];
+      fenceLen = m[1].length;
       buf.push(line);
       continue;
     }
 
     if (inFence) {
       buf.push(line);
-      // 闭合围栏必须与开启围栏同种字符
-      if (m && m[1][0] === fenceChar) {
+      const c = fenceClose(line);
+      // 闭合围栏必须：与开启围栏同种字符，且不短于开启围栏（CommonMark）。
+      // 少这两条里的任意一条，围栏内的内容就会被提前切成正文段，
+      // 随之被 normalizeMath 之类的改写静默破坏——改坏了代码，却不报错。
+      if (c && c[1][0] === fenceChar && c[1].length >= fenceLen) {
         segs.push({ type: 'code', content: buf.join('\n') });
         buf = [];
         inFence = false;
@@ -2532,21 +2540,163 @@ export function extractDescription(md, max = 80) {
 }
 ```
 
-- [ ] **Step 13: 运行全部测试**
+- [ ] **Step 13: 写标签行剥离的失败测试**
+
+改 `test/transform.test.mjs` 两处。第一处：把 `splitLeadingTags` 加进顶部那个 import 列表（放在 `extractDescription,` 之后）：
+
+```js
+  extractDescription,
+  splitLeadingTags,
+} from '../scripts/lib/transform.mjs';
+```
+
+第二处：在文件末尾追加：
+
+```js
+// ---- T9 Part 2：splitLeadingTags（Obsidian 标签行剥离）----
+// 夹具是手写字符串，不是任何真实笔记的正文（真笔记可能含真实姓名，且会把测试与 vault 内容耦合）。
+// T8 的 CRLF 与 T9 的开头空行是这两条的承重点，别把它们「顺手」改掉。
+
+test('splitLeadingTags 剥离首行标签，正文从下一行原样开始', () => {
+  const md = '#DP #单调队列\n## 题目描述\n\n正文';
+  const r = splitLeadingTags(md);
+  assert.deepEqual(r.tags, ['DP', '单调队列']);
+  assert.equal(r.body, '## 题目描述\n\n正文');
+});
+
+test('splitLeadingTags 不把 Markdown 标题行当成标签', () => {
+  const md = '## 题目描述\n\n正文';
+  const r = splitLeadingTags(md);
+  assert.deepEqual(r.tags, []);
+  assert.equal(r.body, md);
+});
+
+test('splitLeadingTags 不把 #include 代码行当成标签', () => {
+  const md = '#include <iostream>\nint main(){}';
+  const r = splitLeadingTags(md);
+  assert.deepEqual(r.tags, []);
+  assert.equal(r.body, md);
+});
+
+test('splitLeadingTags 的标签名不带尾随空格', () => {
+  const r = splitLeadingTags('#树形DP \n正文');
+  assert.deepEqual(r.tags, ['树形DP']);
+  assert.equal(r.body, '正文');
+});
+
+test('splitLeadingTags 对同名标签去重', () => {
+  const r = splitLeadingTags('#DP #DP #DP\n正文');
+  assert.deepEqual(r.tags, ['DP']);
+  assert.equal(r.body, '正文');
+});
+
+test('splitLeadingTags 连续多行标签一并剥离，按出现顺序编号', () => {
+  const r = splitLeadingTags('#A #B\n#C\n正文');
+  assert.deepEqual(r.tags, ['A', 'B', 'C']);
+  assert.equal(r.body, '正文');
+});
+
+test('splitLeadingTags 保留标签行之前的开头空行', () => {
+  const r = splitLeadingTags('\n\n#A\n正文');
+  assert.deepEqual(r.tags, ['A']);
+  assert.equal(r.body, '\n\n正文');
+});
+
+test('splitLeadingTags 保留 CRLF 换行不被改写', () => {
+  const r = splitLeadingTags('#A\r\n\r\n正文\r\n');
+  assert.deepEqual(r.tags, ['A']);
+  assert.equal(r.body, '\r\n正文\r\n');
+});
+
+test('splitLeadingTags 无标签行时 body 与入参逐字节相同', () => {
+  // 开头那个空行是这条的承重点：早返回若写成 body: md.trim()，只有这条会红。
+  const md = '\n## 单调队列\n\n正文一段。\n\n```cpp\n#include <iostream>\nint main(){}\n```\n';
+  const r = splitLeadingTags(md);
+  assert.deepEqual(r.tags, []);
+  assert.equal(r.body, md);
+});
+```
+
+- [ ] **Step 14: 运行测试确认失败**
 
 ```bash
 node --test
 ```
 
-预期：23 个测试全部 PASS。
+预期：**退出码 1，报 `SyntaxError: The requested module '../scripts/lib/transform.mjs' does not provide an export named 'splitLeadingTags'`，读数是 `# tests 1 / # pass 0 / # fail 1`。**
+
+> **这个形状要认准，它是实测的**：失败不是「9 条新用例红了」，而是**整个测试文件在加载期就抛了**，Node 把它算成**一个**失败单元——ESM 的命名导入在模块求值之前就校验，`transform.mjs` 里没有这个导出时，一条用例都跑不起来。看到 `tests 1 / fail 1` 就是对的。
+>
+> 与上面 Step 2 的形态不同：那时 `transform.mjs` **整个文件都不存在**，报 `Cannot find module`；这里是文件在、**只缺这一个导出**。
+
+- [ ] **Step 15: 实现标签行剥离**
+
+在 `scripts/lib/transform.mjs` 末尾追加（**逐字照抄，含注释**）：
+
+```js
+/**
+ * 剥离正文开头的 Obsidian 标签行（如 `#DP #单调队列`），返回标签数组与剩余正文。
+ *
+ * 判据：整行 trim 后按空白切分，**每个 token 都形如 `#` + 非空白非 `#` 的字符**才算标签行。
+ * 于是两种「以 # 开头但不是标签」的行不会被误吃：
+ *   - `## 题目描述`：切出来第二个 token 是 `题目描述`，不以 `#` 开头；
+ *   - `#include <iostream>`：第二个 token 是 `<iostream>`，不以 `#` 开头。
+ *
+ * 连续多行标签行一并吃掉；标签按出现顺序**去重**——同一篇里出现两次同名标签，
+ * 会让标签云显示的篇数与标签详情页列出的篇数对不上。
+ *
+ * **没有标签行时 body 与入参逐字节相同**，同步脚本靠这条保证幂等（第二次运行必须
+ * 产出同样内容，否则每次都会判定「有更新」而重写全部文件）。
+ * 注意 split('\n') 会把 CRLF 的 `\r` 留在各行末尾、join('\n') 又原样拼回，
+ * 所以换行符不被改动——**不要**改成 split(/\r?\n/)。
+ */
+export function splitLeadingTags(md) {
+  const lines = md.split('\n');
+  let i = 0;
+  while (i < lines.length && lines[i].trim() === '') i++;
+
+  const tags = [];
+  const seen = new Set();
+  let j = i;
+  while (j < lines.length) {
+    const tokens = lines[j].trim().split(/\s+/).filter(Boolean);
+    if (tokens.length === 0 || !tokens.every((t) => /^#[^\s#]/.test(t))) break;
+    for (const t of tokens) {
+      const name = t.slice(1);
+      if (!seen.has(name)) { seen.add(name); tags.push(name); }
+    }
+    j++;
+  }
+
+  if (j === i) return { tags: [], body: md };
+  return { tags, body: lines.slice(0, i).concat(lines.slice(j)).join('\n') };
+}
+```
+
+> **那段注释是承重的，别删**：它写了为什么**不能**把 `split('\n')` 改成 `split(/\r?\n/)`——改了之后 CRLF 的 `\r` 会被吃掉，函数就不再满足「没有标签行时 body 与入参逐字节相同」，而同步脚本的幂等判定正靠这一条（第二次运行必须产出同样内容，否则每次都会判定「有更新」而重写全部文件）。控制器实测过：那种改法只有「保留 CRLF 换行不被改写」这一条用例会红。
+
+- [ ] **Step 16: 运行全部测试**
+
+```bash
+node --test
+```
+
+预期：40 个测试全部 PASS。
 
 > **这套测试的验证状况（如实记录）**：计划编写阶段把**原始**实现跑通过一遍（22 个用例）。**但那个实现里 `normalizeHeadings` 是错的**——它经由 `mapText` 逐段落计算平移量，代码块把文档切开后每段各算各的 `shift`，相对层级会被抹平（详见 Step 9 的注释）。
 >
-> 控制器已把它改成「先切段、按整篇统算 min、再回填」，并新增第 14 个用例专门守这个缺陷。**新实现已在全部 23 个用例上重跑通过，且新用例在旧实现上确认失败（两个方向都实测过）**。上面那个 `extractDescription` 的实现与其它函数均未改动。
+> 控制器已把它改成「先切段、按整篇统算 min、再回填」，并新增第 14 个用例专门守这个缺陷。**新实现已在全部用例上重跑通过，且新用例在旧实现上确认失败（两个方向都实测过）**。
 >
-> 因此若你执行时看到失败，**大概率是实现被改动过，而不是测试本身有问题**。
+> **40 这个数字的来路，别照抄计划里别处的旧数字**：计划编写时是 23 条；Part 1 落地时评审轮次又补了 8 条 → 31 条；标签行再补 9 条 → **40 条**。**那 8 条不在计划里**——它们是评审阶段发现的可判别边界，属于计划的已知缺口，这里如实记一笔，不假装计划本来就列全了。
+>
+> **因此若你执行时看到失败，大概率是实现被改动过，而不是测试本身有问题。**
 
-- [ ] **Step 14: 提交**
+> **别为「每条用例都要有唯一坏法」硬凑坏法——这个目标做不到，也不该做。** 控制器用 11 种注入在隔离副本上实测过（其中「删掉早返回」一种经实测是**等价重构**，不是坏法：`slice(0,i).concat(slice(j))` 在 `i===j` 时拼回的就是原数组，删不删它测试都全绿）。10 种真坏法里，7 种各有唯一捕获者，另 3 种是多条用例共同捕获（最容易红的是把标签名写成带 `#` 的那种，一次红 6 条）。
+>
+> **有 3 条用例不是任何坏法的唯一捕获者**：「剥离首行标签」「不把 Markdown 标题行当成标签」「标签名不带尾随空格」。注意它们**都能被某条坏法打红**，不是恒真断言（恒真断言才是必须修的缺陷）；它们的作用是把边界钉在用例里。**控制器专门为「尾随空格」造过一种坏法（同时去掉 `trim()` 与 `filter(Boolean)`），实测它红的是「尾随空格」和「保留 CRLF 换行不被改写」两条**——尾随空格与 CRLF 的 `\r` 在正则 `\s` 面前是同一件事，凑不出唯一。所以看到某条用例没有专属坏法时，**不要让实现者去改测试凑覆盖**。
+
+
+- [ ] **Step 17: 提交**
 
 ```bash
 git add -A
