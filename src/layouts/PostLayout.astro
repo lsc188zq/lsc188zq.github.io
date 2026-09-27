@@ -1,0 +1,113 @@
+---
+import katexCss from 'katex/dist/katex.min.css?url';
+import BaseLayout from './BaseLayout.astro';
+import TableOfContents from '../components/TableOfContents.astro';
+import CodeEnhance from '../components/CodeEnhance.astro';
+import '../styles/prose.css';
+
+interface Props {
+  post: {
+    id: string;
+    data: {
+      title: string;
+      date: Date;
+      category: string;
+      tags: string[];
+      description?: string;
+    };
+    body?: string;
+  };
+  headings: { depth: number; slug: string; text: string }[];
+  prev?: { id: string; title: string };
+  next?: { id: string; title: string };
+}
+
+const { post, headings, prev, next } = Astro.props;
+const iso = post.data.date.toISOString().slice(0, 10);
+
+// 中文按 400 字/分钟估算；英文单词按 200 词/分钟。
+// 简化处理：统计非空白字符数，除以 400，最少 1 分钟。
+const text = (post.body ?? '')
+  .replace(/```[\s\S]*?```/g, '')   // 代码块不计入阅读时长
+  .replace(/!\[[^\]]*\]\([^)]*\)/g, '');
+const charCount = text.replace(/\s/g, '').length;
+const minutes = Math.max(1, Math.round(charCount / 400));
+
+const body = post.body ?? '';
+// 先去掉代码块，避免代码里的 $ 造成误判（样例里就有一段含 $100 和 $sum$ 的 C++）
+const bodyNoCode = body.replace(/```[\s\S]*?```/g, '');
+const hasMath = /\$[^$\n]+\$|\$\$[\s\S]+?\$\$/.test(bodyNoCode);
+---
+<BaseLayout title={post.data.title} description={post.data.description}>
+  {hasMath && <link rel="stylesheet" href={katexCss} />}
+  <div class="post-grid">
+    <article>
+      <a class="back" href="/">← 返回文章列表</a>
+      <h1 class="title">{post.data.title}</h1>
+      <div class="meta">
+        <span>{iso}</span>
+        <span class="cat">{post.data.category}</span>
+        <span>约 {minutes} 分钟</span>
+      </div>
+      {post.data.tags.length > 0 && (
+        <div class="tags">
+          {post.data.tags.map((t) => <a class="tag" href={`/tags/${encodeURIComponent(t)}`}>#{t}</a>)}
+        </div>
+      )}
+      <div class="prose"><slot /></div>
+      {(prev || next) && (
+        <nav class="pn">
+          {prev ? <a class="pn-item" href={`/posts/${prev.id}`}><span class="pn-lbl">← 上一篇</span><span class="pn-ttl">{prev.title}</span></a> : <span />}
+          {next ? <a class="pn-item" href={`/posts/${next.id}`}><span class="pn-lbl">下一篇 →</span><span class="pn-ttl">{next.title}</span></a> : <span />}
+        </nav>
+      )}
+    </article>
+    <TableOfContents headings={headings} />
+  </div>
+  <CodeEnhance />
+</BaseLayout>
+
+<style>
+  .post-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 168px;
+    gap: 30px;
+  }
+  .back {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--mu);
+    margin-bottom: 18px;
+  }
+  .title { font-size: 26px; line-height: 1.45; margin: 0 0 12px; font-weight: 700; letter-spacing: -0.01em; }
+  .meta {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--fa);
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    align-items: center;
+    margin-bottom: 14px;
+  }
+  .cat { border: 1px solid var(--bd); padding: 1px 7px; border-radius: 4px; color: var(--mu); }
+  .tags { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 26px; padding-bottom: 20px; border-bottom: 1px solid var(--bd); }
+  .tag { font-family: var(--mono); font-size: 11px; color: var(--ac); padding: 2px 7px; border-radius: 5px; }
+  .tag:hover { background: var(--chip); text-decoration: none; }
+  .pn { display: flex; gap: 12px; margin-top: 34px; padding-top: 20px; border-top: 1px solid var(--bd); }
+  .pn-item {
+    flex: 1;
+    display: block;
+    border: 1px solid var(--bd);
+    border-radius: 9px;
+    padding: 11px 14px;
+    background: var(--chip);
+  }
+  .pn-item:hover { border-color: var(--ac); text-decoration: none; }
+  .pn-lbl { display: block; font-family: var(--mono); font-size: 10px; color: var(--fa); margin-bottom: 5px; }
+  .pn-ttl { font-size: 13px; font-weight: 600; line-height: 1.5; color: var(--tx); }
+  @media (max-width: 900px) {
+    .post-grid { grid-template-columns: 1fr; }
+  }
+</style>

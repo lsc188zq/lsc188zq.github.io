@@ -25,7 +25,9 @@
   - `playwright-core` **不下载任何浏览器**，安装仅 1 个包、约 2 秒，且能正常驱动系统 Edge（已实测确认）。
 - **分类枚举固定为 6 个**：`知识`、`技术`、`项目`、`书单`、`游记`、`杂谈`。写错必须让构建失败。
 - **颜色令牌**：深色为主题默认值，**不跟随系统偏好**。
-- **正文禁用等宽字体**（中文无等宽字形，会 fallback 导致中英混排字形不统一）。等宽只用于代码块、日期、标签、logo。
+- **正文禁用等宽字体**（中文无等宽字形，会 fallback 导致中英混排字形不统一，字宽对不齐）。**这条的射程是「正文」，不是「全站」**——元信息、标签、分类芯片这类**微文案可以用等宽**（`.meta`、`.cat`、`.pn-lbl`、`.back`、`.tag`、`.page-sub`、`.cloud-item` 都是有意为之，属于深夜终端风的一部分）。代码块、日期、logo 当然也用等宽。
+  - **射程写准的理由**：T6 评审报过一次 F4（中文微文案用等宽），根因是原句写成了「等宽**只**用于代码块、日期、标签、logo」这个正面白名单——它把 T5 已经落地并通过评审的做法（`PostCard` 的分类芯片）判成了违规。**照旧写法，T8 与 T12 会把同一条当新发现再报两遍。** 故改为对正文的否定式。
+  - **已知代价**（用户可见但极轻，随时可改回）：中文回退字形与 Consolas 字宽不一致，`.meta`（`2026-01-01 知识 约 1 分钟`）那一行的数字与汉字不是一个节奏。
 - **自有 JavaScript 总量上限 ~90 行 / 3 KB**（内联 + 打包，不含第三方的 Pagefind 与 giscus）。
   - 设计文档第 10 节的「~60 行」是**动手前的估算**（深色模式 ~10、分类筛选 ~20、目录高亮 ~15、代码复制 ~15）。落地后有三处超出，且超出的部分都是**必须的**，不是膨胀：
     - 深色模式 10 → ~26：多了 `localStorage` 异常兜底（读、写各一处）与 `aria-label` 随状态更新。
@@ -40,7 +42,15 @@
 - **每条验证都必须有判别力**：它要能真的失败。
   - **负路径测试尤其危险。** 凡是「异常时应当……」「缺失时应当……」「没找到时应当……」这类断言，**必须带一个证明负路径确实被走到的标记**（计数器、打点、写回一个可读回的值），否则「兜底生效」和「根本没走到那条路」的输出会**逐字相同**，测试全绿而什么也没证明。
   - 同理，**断言的落点要尽量靠近用户可见的结果**（计算样式、截图、构建产物的字节），而不是内部状态的痕迹（属性、类名、DOM 数量）——后者可以在用户什么都看不到的情况下全部通过。
-  - 本项目已经在这上面栽过三次：T5 的筛选探针会报假通过（`hidden` 属性被作者样式盖掉，卡片一张没少而探针全绿）、T4 的首帧探针**证不了**它名义上要证的 FOUC、T4 修复轮的「localStorage 抛异常」测试在注入根本没生效时照样全绿。
+  - **本项目已经在这上面栽过六次**，且**六次里有五次是计划文本自己写的探针**：
+    1. T4 的首帧探针**证不了**它名义上要证的 FOUC；
+    2. T4 修复轮的「localStorage 抛异常」测试，在注入根本没生效时照样全绿；
+    3. T5 的筛选探针会报假通过（`hidden` 属性被作者样式盖掉，卡片一张没少而探针全绿）；
+    4. T5 的筛选探针**改了落点却没改判别力**——点全库唯一的分类，`可见卡片: 1` 同时对应三种情况；改成只点 0 篇分类后，**又把「点有文章的分类必须为 1」那条覆盖删了**，于是把 `data-category` 改成 `"知识 "`（尾随空格）能全绿而全站分类皆空（**评审者用变异测试实证复现**）；
+    5. T6 的滚动高亮断言 `on[0]===all[0]`：观察器完全死掉时 `on` 为空、`on[0]` 是 `undefined`，**打印出的那一行与正常工作时逐字节相同**——而初稿旁边还写着「这条断言一次盖住两种」，**那句自我保证是错的**；
+    6. T8 的标签页探针：过滤条件漏掉分类时，页面照样生成、标题照样对、**篇数也照样是 1**（全库只此一篇），全绿。
+  - 第 6 条形状不同，单独记：前五条是**取值**问题（坏掉时输出一样），第 6 条是**射程**问题（断言测的页面和要防的缺陷不在同一处）。**修完一个缺陷要回头问：验它的那条断言，测的是不是同一个东西？**
+  - 于是派发任何人之前，对每条断言只问一句：**「把这条坏法注进去，它会红吗？」** 答不上来的断言不算验证，只算装饰。**负路径、双向筛选、边界值尤其要问。**
 - **提交信息用中文**，格式 `<type>: <描述>`。
 
 ---
@@ -1146,15 +1156,39 @@ node scripts/shot.mjs "http://localhost:4321/" home dark
 
 - [ ] **Step 5: 验证筛选真的生效**
 
+**点三个分类，三种状态都要看**：
+
 ```bash
-node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage();await p.goto('http://localhost:4321/');await p.click('.cf-btn[data-cat=\"知识\"]');await p.waitForTimeout(200);const vis=await p.\$\$eval('.card',ns=>ns.filter(n=>getComputedStyle(n).display!=='none').length);const st=await p.textContent('#list-status');console.log('可见卡片:',vis,'| 状态行:',st);await p.screenshot({path:'.shots/home-filtered.png',fullPage:true});await b.close();})"
+node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage();await p.goto('http://localhost:4321/');const vis=async()=>await p.\$\$eval('.card',ns=>ns.filter(n=>getComputedStyle(n).display!=='none').length);const st=async()=>await p.textContent('#list-status');console.log('卡片上的 data-category:',JSON.stringify(await p.\$\$eval('.card',ns=>ns.map(n=>n.dataset.category))));const click=async c=>{await p.click('.cf-btn[data-cat=\"'+c+'\"]');await p.waitForTimeout(200);console.log(c,'-> 可见卡片:',await vis(),'| 状态行:',await st());};await click('知识');await p.screenshot({path:'.shots/home-filtered.png',fullPage:true});await click('技术');await p.screenshot({path:'.shots/home-filtered-empty.png',fullPage:true});await click('__all__');await b.close();})"
 ```
 
-预期：`可见卡片: 1 | 状态行: 知识 · 1 篇`。
+预期：
 
-**探针为什么数的是"计算样式"而不是 `:not([hidden])`**：`hidden` 属性的 `display:none` 来自 UA 样式表，属"呈现性提示"，优先级低于作者样式。`PostCard` 里的 `.card{display:grid}` 会把它盖掉——属性设上了、`:not([hidden])` 也数得对，**但卡片一张都没从画面上消失**。已实测确认。用 `getComputedStyle(...)!=='none'` 数，才是"用户真的看得见几张"。所以 `PostCard` 里那条 `.card[hidden]{display:none}` 是功能的一部分，不是可选的样式糖。
+```
+卡片上的 data-category: ["知识"]
+知识     -> 可见卡片: 1 | 状态行: 知识 · 1 篇
+技术     -> 可见卡片: 0 | 状态行: 技术 · 0 篇
+__all__  -> 可见卡片: 1 | 状态行: 共 1 篇
+```
 
-**并且必须目视确认 `.shots/home-filtered.png` 里只剩 1 张卡片。** 这条不能只靠 DOM 探针——上面那个假通过的坑，探针本身就是帮凶。若可见数为 0，检查 `PostCard` 的 `data-category` 是否与 `CATEGORIES` 里的字符串完全一致（含中文，不能有空格差异）。
+**四条输出各自在守什么——少一条就有一个坏法能全绿溜过去**：
+
+| 输出 | 它排掉的坏法 |
+|---|---|
+| `data-category: ["知识"]` | 卡片属性与 `CATEGORIES` 里的字符串对不上（**尾随空格、全半角括号**）。这是本项目明令警惕的坑，而它**打印出来**才看得见 |
+| `知识 -> 1` | 分类**匹配逻辑**坏了（比如恒不相等）——点有文章的分类却一篇都出不来 |
+| `技术 -> 0` | **隐藏没有真的生效**：`hidden` 属性设上了、DOM 查询数得对，但 `.card{display:grid}` 盖住了 UA 规则，**画面上卡片一张没少**（Ruling 9 那个假通过） |
+| `__all__ -> 1` | **过度隐藏**：筛选一跑就把卡片全藏了、点「全部」也回不来 |
+
+**这四条不是凑数，是两次实战补出来的。** 最初只点「知识」——但全库此刻唯一的文章**就是**「知识」，`可见卡片: 1` 同时对应「匹配正常」「筛选压根没跑」「隐藏没生效」，**它排不掉它本该防的坏法**。改成只点「技术」后，`知识 -> 1` 那条又被丢了：**评审者用变异测试证明**，把产物里的 `data-category="知识"` 改成 `"知识 "`（一个尾随空格），探针 6/6 全绿、退出码 0，而同一份产物里点「知识」得到 `可见卡片: 0`——**全库唯一的文章在任何分类下都不可达**。所以四条一起写，缺一不可。
+
+（**这是本项目第四次栽在同一件事上**：探针的输出在坏掉时和好着时一模一样。前三次是 T5 的 `:not([hidden])` 计数、T4 的首帧探针、T4 的异常注入测试。已提为全局约束。）
+
+**探针为什么数的是"计算样式"而不是 `:not([hidden])` 的个数**：`hidden` 属性的 `display:none` 来自 UA 样式表，属"呈现性提示"，优先级低于作者样式。`PostCard` 里的 `.card{display:grid}` 会把它盖掉——属性设上了、`:not([hidden])` 也数得对，**但卡片一张都没从画面上消失**。已实测确认。用 `getComputedStyle(...)!=='none'` 数，才是"用户真的看得见几张"。所以 `PostCard` 里那条 `.card[hidden]{display:none}` 是功能的一部分，不是可选的样式糖。
+
+**并且必须目视确认这两张截图**：`home-filtered-empty.png` 里**卡片区一张不剩**（连分隔线都不该有），`home-filtered.png` 里**只剩 1 张**。这条不能只靠 DOM 探针——上面那个假通过的坑，探针本身就是帮凶。
+
+**出问题时先看哪一行（这里曾经写反过，评审者指出来了）**：若 `知识 -> 可见卡片: 1` 不成立，**第一嫌疑**是 `PostCard` 的 `data-category` 与 `CATEGORIES` 里的字符串对不上（中文，多一个空格、用了全角括号都会对不上）。**不要去看「技术」那一行**——`data-category` 拼错时，「技术」的可见数**恰好也是 0**，它碰巧通过，**看上去一切正常**。判断依据是探针第一行打印的 `卡片上的 data-category:`，它直接把实际字符串摊开；`知识 -> 1` 是这条链路的**功能性**断言，两者一起才关得住。
 
 - [ ] **Step 6: 提交**
 
@@ -1238,26 +1272,61 @@ const toc = headings.filter((h) => h.depth === 2 || h.depth === 3);
 
 <script>
   const links = Array.from(document.querySelectorAll('.toc-link'));
-  const targets = links
-    .map((l) => document.getElementById(l.dataset.target))
-    .filter((el) => el !== null);
 
-  if (targets.length) {
-    const obs = new IntersectionObserver(
-      (entries) => {
-        for (const e of entries) {
-          if (!e.isIntersecting) continue;
-          links.forEach((l) => l.classList.toggle('on', l.dataset.target === e.target.id));
-        }
-      },
-      { rootMargin: '0px 0px -70% 0px', threshold: 0 }
-    );
-    targets.forEach((t) => obs.observe(t));
-  }
+  // 缓存每个标题的**文档绝对位置**。getBoundingClientRect().top + scrollY 与当前
+  // 滚动位置无关，所以只需在加载和 resize 时各算一次——scroll 回调里就不读布局了。
+  let tops = [];
+  const measure = () => {
+    tops = links.map((l) => {
+      const el = document.getElementById(l.dataset.target);
+      return el ? el.getBoundingClientRect().top + scrollY : Infinity;
+    });
+  };
+
+  const LINE = 0.3; // 参考线取视口高度的 30%
+
+  const sync = () => {
+    const y = scrollY + innerHeight * LINE;
+    // 「滚到底」必须**同时**满足「还能滚」和「确实滚到了底」。
+    // 只写 scrollY + innerHeight >= scrollHeight - 2 的话，当文章总高不超过视口时
+    // 它**恒为真**——读者明明在一篇短随笔的顶部，目录却点亮最后一节，
+    // 与他实际所在的位置不符。这和上面那条"末尾够不到参考线"是同一类缺陷，只是方向相反。
+    const maxScroll = document.documentElement.scrollHeight - innerHeight;
+    const atBottom = maxScroll > 0 && scrollY >= maxScroll - 2;
+    // 滚到底时，末尾几节的标题因为**无处可滚**，永远到不了参考线——没有这一条，
+    // 目录里最后几节永远高亮不了，点它们的链接也毫无反应。
+    // 已实测：点「另一个三级标题」跳到底部后，原实现的高亮项是空数组。
+    let idx = atBottom ? links.length - 1 : 0;
+    if (!atBottom) {
+      for (let i = 0; i < tops.length; i++) if (tops[i] <= y) idx = i;
+    }
+    links.forEach((l, i) => l.classList.toggle('on', i === idx));
+  };
+
+  measure();
+  sync();
+  addEventListener('scroll', sync, { passive: true });
+  addEventListener('resize', () => { measure(); sync(); });
 </script>
 ```
 
-`rootMargin: '0px 0px -70% 0px'` 的作用：把观察区域的底部收缩 70%，这样只有进入视口上方 30% 的标题才算「当前」，否则页面中间那个标题会一直高亮，与阅读位置不符。
+**为什么不用 `IntersectionObserver`**：初版是 `rootMargin: '0px 0px -70% 0px'` + IntersectionObserver，**已实测有真实缺陷，而且是用户直接看得见的**（T6 实施者发现，控制器独立复现后裁定返工）：
+
+- 观察带是「视口顶部 30%」。**页面滚到底时，最后几节的标题因为无处可滚，永远进不了这条带。**
+- 样例文章的实测几何：页面 **1155** / 视口 400 / 最大滚动 **755**；6 个标题的文档位置是 267 / 378 / 612 / **935** / **996** / **1093**；带底 = 755 + 400×0.3 = **875** —— **最后三个标题永远够不到 875**。
+- 后果两条：
+  1. **点目录里「另一个三级标题」跳到底部，目录一项都不亮**（实测 `高亮: []`）；
+  2. 阶梯滚到底，读者已经在最后三节，目录却停在第四节「代码块里的危险字符」（实测如此）。
+- 还有第三条隐患：高亮是**黏的**——只在 `isIntersecting` 为真时才切换，标题离开观察带时不清除。所以"高亮项"和"读到的位置"可以差好几节。
+
+改成「**参考线 + 滚到底兜底**」：参考线仍在视口 30% 处（保持原设计意图），但滚到底时直接点亮最后一项。实测新逻辑单调推进、每一项都能点亮：
+
+```
+scrollY   0  -> 行内公式
+scrollY 360  -> 块级公式
+scrollY 500  -> 代码块里的危险字符
+scrollY 755  -> 另一个三级标题     ← 原实现这里高亮为空
+```
 
 - [ ] **Step 2: 创建文章页骨架**
 
@@ -1461,10 +1530,40 @@ node scripts/shot.mjs "http://localhost:4321/posts/_sample" post dark
 - [ ] **Step 6: 验证目录滚动高亮**
 
 ```bash
-node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage({viewport:{width:1100,height:800}});await p.goto('http://localhost:4321/posts/_sample');await p.evaluate(()=>window.scrollTo(0,document.body.scrollHeight*0.6));await p.waitForTimeout(600);const on=await p.\$\$eval('.toc-link.on',n=>n.map(x=>x.textContent));console.log('高亮的目录项:',on);await b.close();})"
+node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage({viewport:{width:1100,height:400}});await p.goto('http://localhost:4321/posts/_sample');const H=()=>Math.max(document.body.scrollHeight,document.documentElement.scrollHeight);const m=await p.evaluate(()=>({sh:Math.max(document.body.scrollHeight,document.documentElement.scrollHeight),vh:window.innerHeight}));console.log('页面高:',m.sh,'| 视口高:',m.vh,'| 能滚动:',m.sh>m.vh+50);await p.evaluate(()=>window.scrollTo(0,Math.max(document.body.scrollHeight,document.documentElement.scrollHeight)));await p.waitForTimeout(600);const all=await p.\$\$eval('.toc-link',n=>n.map(x=>x.textContent));const on=await p.\$\$eval('.toc-link.on',n=>n.map(x=>x.textContent));console.log('目录全部:',all,'(共',all.length,'项)');console.log('滚到底时高亮的目录项:',on,'(共',on.length,'项)');console.log('滚动高亮正常:',on.length===1&&all.length>0&&on[0]!==all[0]);await b.close();})"
 ```
 
-预期：输出非空数组，且高亮的项目与页面滚动到的位置相符（不是永远高亮第一项）。
+预期：`能滚动: true`；`目录全部` **6 项**；`滚到底时高亮的目录项` **恰好 1 项**，且**不是第一项**；`滚动高亮正常: true`。
+
+**三个刻意的设计，别改**：
+- **视口高度写死 400**（不是 800）。实测（1100 宽 / **T6 版两栏布局**，即本任务完成后的实际布局）：页面高 **1155**，最大滚动 **755**；800 高的视口只剩 **355** 的滚动范围。800 不是滚不动，但**滚动范围太小**——"滚到底"和"刚滚一点"在 400 视口下差得足够远，高亮位置的判断才有信息量。
+  （注：T4 版布局量到的是 1120 / 720。本任务的两栏网格把正文列压窄了，行数变多，所以页面变高。**别照着 1120 去核对**。）
+- **先打印 `能滚动`**。若它输出 `false`，说明这条验证此刻**无意义**，要在报告里如实写"页面不够长，滚动高亮未能验证"，**不要当成通过**。
+- **必须是「直接跳到底」而不是「阶梯滚到底」**。这不是省事，是**这条探针唯一有判别力的写法**：原实现（IntersectionObserver + 顶部 30% 观察带）在**阶梯滚动时表现是对的**，只有**直接跳到底**才会暴露"最后三节永远进不了观察带"这个缺陷（实测：阶梯滚到底高亮 `代码块里的危险字符`，直接跳到底高亮 `[]`）。改成阶梯滚动会让这条探针**变绿而缺陷仍在**——本项目第七次遇到「探针在坏掉时和好着时输出一样」。判断依据仍然是那句话：**把坏法注进去，它会红吗？** 这里"坏法"就是原实现，答案是「只有直接跳才会红」。
+
+**再补一条：视口比页面还高时，不能点亮最后一项。**
+
+```bash
+node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage({viewport:{width:1100,height:1300}});await p.goto('http://localhost:4321/posts/_sample');const h=await p.evaluate(()=>Math.max(document.body.scrollHeight,document.documentElement.scrollHeight));const all=await p.\$\$eval('.toc-link',n=>n.map(x=>x.textContent));const on=await p.\$\$eval('.toc-link.on',n=>n.map(x=>x.textContent));console.log('页面高:',h,'| 视口高: 1300 | 能滚动:',h>1302);console.log('高亮项:',on);console.log('高亮的是不是最后一项:',on[0]===all[all.length-1]);await b.close();})"
+```
+
+预期：`页面高: 1300 | 视口高: 1300 | 能滚动: false`；`高亮项: [ '块级公式' ]`；`高亮的是不是最后一项: false`。
+
+**`页面高` 会打印 1300 而不是 1155，这不是笔误。** `scrollHeight` 是「内容高度」与「视口高度」的**较大者**——内容只有 1155，视口 1300，所以它读出来是 1300。**别去把它"修正"成 1155**，也别据此认为探针跑错了页面。（内容真实高度 1155 这个数在 Step 6 上面那条 400 视口的探针里是有意义的；这里没有。）
+
+**这条守的是"滚到底兜底"自己的反面**：如果兜底条件写成 `scrollY + innerHeight >= scrollHeight - 2`，那么**文章总高不超过视口时它恒为真**——读者在短随笔的**顶部**，目录却点亮**最后一节**。**这与本步上面裁掉的那个缺陷是同一类**（目录指的位置和读者实际位置不符），只是方向相反。
+
+**这条有判别力，且已实测确认**：改之前跑，输出是 `高亮项: [ '另一个三级标题' ] | 高亮的是不是最后一项: true` —— **红**。改之后才是上面那个预期值。
+
+（正确值恰好是 `块级公式` 而不是 `行内公式`：参考线在 1300×0.3 = **390**，标题位置是 267 / 378 / 612 / …，390 之上的最后一个正是 378 的「块级公式」。**别把它"修正"成 `行内公式`**——那说明你把参考线理解成了视口顶部。）
+
+**为什么断言长这样、而不是分成两条**：目录高亮最容易的坏法有**三种**——① 观察器没工作，谁都不高亮；② 忘了把其它项的高亮摘掉，于是**永远高亮第一项**；③ 写成"叠加"而不是"切换"，**越滚高亮越多**。
+
+- 只写 `on[0]===all[0]`（本任务初稿就是这写的，还配了一句"这条断言一次盖住两种"）**三种都盖不住**。① 让 `on` 为空数组，`on[0]` 是 `undefined`，`undefined===all[0]` 为 `false`——**打印出来的那一行和正常工作时一模一样**。初稿那句自我保证是错的，而错的自我保证比没写更糟：它会让人放心不去看。
+- 合成一个布尔值后三种坏法全部让它红：`on.length===1` 拦住 ① 和 ③，`on[0]!==all[0]` 拦住 ②。
+- 末尾的 `all.length>0` 是防"目录压根没渲染"。此时 `all` 和 `on` 都为空，`undefined!==undefined` 恰好也是 `false`，**不加也拦得住——但那是巧合不是推理**，所以显式写上。
+
+（**这已经是本项目第五次栽在"探针在坏掉时和好着时输出一样"上**：T5 的 `:not([hidden])` 计数、T4 的首帧探针、T4 的异常注入、T5 的筛选探针（Ruling 16/17）、以及这条。四次里有三次是**我自己写的**。派发前逐条问「把坏法注进去，它会红吗」。）
 
 - [ ] **Step 7: 验证公式样式按需加载**
 
@@ -1713,7 +1812,7 @@ int main() {
 
     return 0;
 }
-````
+```
 ````
 
 > 上面这段是**树状数组**实现，真实行数 **49 行**，超过 40 行阈值。注意里面含 `#include`、`#define` 风格的写法与 `'\n'` 转义——它们同时也在检验公式归一的「跳过代码块」是否正确。
@@ -1733,10 +1832,38 @@ npm run preview
 另开终端：
 
 ```bash
-node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage({viewport:{width:1100,height:900}});await p.goto('http://localhost:4321/posts/_sample');const f=await p.\$\$eval('details.code-fold',n=>n.length);const s=await p.\$\$eval('details.code-fold > summary',n=>n.map(x=>x.textContent));console.log('折叠块:',f,'|',s);await b.close();})"
+node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage({viewport:{width:1100,height:900}});await p.goto('http://localhost:4321/posts/_sample');const f=await p.\$\$eval('details.code-fold',n=>n.length);const s=await p.\$\$eval('details.code-fold > summary',n=>n.map(x=>x.textContent));console.log('折叠块:',f,'|',s);const ln=await p.evaluate(()=>{const el=document.querySelector('.prose pre code .line');if(!el)return {found:false};const before=getComputedStyle(el,'::before');const code=getComputedStyle(el.parentElement);return {found:true,content:before.content,counterIncrement:before.counterIncrement,counterReset:code.counterReset,lineCount:el.parentElement.querySelectorAll('.line').length};});console.log('行号 ::before:',JSON.stringify(ln));await b.close();})"
 ```
 
-预期：`折叠块: 1 | ['展开全部（N 行）']`，N ≥ 41。
+预期：`折叠块: 1 | ['展开全部（N 行）']`，**N 必须 ≥ 49**；再加一行
+
+```
+行号 ::before: {"found":true,"content":"counter(line)","counterIncrement":"line 1","counterReset":"line 0","lineCount":7}
+```
+
+> **`lineCount` 是 7，不是 49 —— 这两个数说的是两件事。** 上面那条探针读的是 `document.querySelector('.prose pre code .line')`，即文章里**第一段**代码块；而 49 行的夹具按 Step 4 追加在**文末**，是**第二段**。实测 `_sample.md`：第一段在 29–37 行共 **7** 行，第二段在 49–99 行共 **49** 行。所以：
+>
+> - `lineCount: 7` 守的是「Shiki 真的产出了 `.line` 元素」——它**必须非零且等于第一段的真实行数**。写成 49 会**恒红**（除非有人正好把夹具调到文首）；写成 0 或 `found:false` 才说明行号方案的前提不成立。
+> - **49 这个数归上面的 `N ≥ 49` 管**（它读的是折叠块自己的 `<summary>` 文本），不归这条。两条断言各守一段代码块。
+>
+> 原计划在这里写 49，是一条**从未对着真夹具核过的断言**（本项目第 14 次撞上这个类别：坏掉时和好着时输出一样，或者干脆永远红）。**改动它之前，先数一遍 `_sample.md` 里的两段代码块。**
+
+三个判据：
+
+- **`N ≥ 49`，不是 `N ≥ 41`。** 那个代码块本身就是 **49 行**（Step 4 的 `#include` 到最后的 `}`，数一遍就是 49），渲染出来的 `.line` 只可能 **≥ 49**（末尾空行可能多出一个）。写 `≥ 41` 的话，**一个只渲染出 41 行的截断代码块照样通过**——而阈值是 40，41 也满足 `> 40`，折叠块数还是 1，**前两条断言全都看不出来**。下界必须贴着实际行数写。
+- **`found` 必须是 `true`**：说明 Shiki 真的产出了 `.line` 元素。`false` 就说明行号方案的前提不成立（此时 `折叠块:` 多半也会是 0 或 1 以外的值）。
+- **`content` 必须含 `counter(line)`、`counterIncrement` 必须含 `line`、`counterReset` 必须含 `line`——三条缺一不可**：这才是「行号真的会渲染出数字」的完整证据。行号是纯 CSS 计数器生成的，**不在 DOM 里**，所以它坏掉时**页面上什么都不会显示，而 `折叠块:`、`复制按钮数`、以及除 Step 6 那张人眼截图之外的一切断言全都是绿的**。截图那张是人眼看的，这条是自动的。三条各排掉一种坏法：
+
+  | 判据 | 排掉的坏法 | 只看另外两条会漏掉什么 |
+  |---|---|---|
+  | `content` 含 `counter(line)` | `.prose pre code .line::before` 整条规则没匹配上（`content` 变成 `none`） | — |
+  | `counterReset` 含 `line` | `code` 上的 `counter-reset: line` 漏写 | 计数器不归零，行号从上一块接着数 |
+  | `counterIncrement` 含 `line` | `::before` 上的 `counter-increment: line` 漏写 | **计数器恒为 0，每一行都显示 `0`**——`content` 和 `counterReset` **两条都照样是绿的** |
+
+  最后一行是本条补丁的重点：**光看 `content` 的字符串值证明不了里面有数字**，`counterIncrement` 才是那个字面量。
+  - 不要断言它们精确相等：Chromium 把 `counter-reset: line` 报成 `line 0`、把 `counter-increment: line` 报成 `line 1`（**已实测**）。判据是**含 `line`**，不是等于。
+
+**已由控制器实测**（在一个独立临时页面上跑的，不依赖本仓库构建）：规则生效时三条读数为 `content:"counter(line)"` / `counterIncrement:"line 1"` / `counterReset:"line 0"`；把 `content` 抹成 `none` 后 `content` 读 `"none"`。判据有判别力。页面截图确认渲染出 `1 / 2 / 3`。
 
 - [ ] **Step 6: 截图确认行号与主题配色**
 
@@ -1750,10 +1877,16 @@ node scripts/shot.mjs "http://localhost:4321/posts/_sample" code light
 - [ ] **Step 7: 验证复制按钮（本任务此前唯一没有验证的交付物）**
 
 ```bash
-node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage();await p.addInitScript(()=>{window.__copied=null;if(navigator.clipboard)navigator.clipboard.writeText=async t=>{window.__copied=t;};});await p.goto('http://localhost:4321/posts/_sample');const n=await p.\$\$eval('.copy-btn',x=>x.length);await p.locator('.copy-btn').first().click();await p.waitForTimeout(150);const r=await p.evaluate(()=>({copied:window.__copied,label:document.querySelector('.copy-btn').textContent}));console.log('复制按钮数:',n,'| 按钮文字:',r.label,'| 复制到字符数:',r.copied?r.copied.length:null);console.log('首行:',JSON.stringify((r.copied||'').split(String.fromCharCode(10))[0]));console.log('首行是否以数字开头(即混进了行号):',/^(\\s*)\\d/.test(r.copied||''));await b.close();})"
+node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage();await p.addInitScript(()=>{window.__copied=null;if(navigator.clipboard)navigator.clipboard.writeText=async t=>{window.__copied=t;};});await p.goto('http://localhost:4321/posts/_sample');const n=await p.\$\$eval('.copy-btn',x=>x.length);await p.locator('.copy-btn').first().click();await p.waitForTimeout(150);const r=await p.evaluate(()=>({copied:window.__copied,label:document.querySelector('.copy-btn').textContent}));console.log('复制按钮数:',n,'| 按钮文字:',r.label,'| 复制到字符数:',r.copied?r.copied.length:null);console.log('首行:',JSON.stringify((r.copied||'').split(String.fromCharCode(10))[0]));console.log('首行是否以数字开头(即混进了行号):',/^(\\s*)\\d/.test(r.copied||''));await p.evaluate(()=>{navigator.clipboard.writeText=async()=>{throw new Error('denied');};});await p.locator('.copy-btn').first().click();await p.waitForTimeout(150);console.log('写剪贴板抛错后按钮文字:',await p.textContent('.copy-btn'));await b.close();})"
 ```
 
-预期：`复制按钮数: 2`（两个代码块各一个）｜`按钮文字: 已复制`｜`复制到字符数` 大于 0｜`首行` 是 `"#include <bits/stdc++.h>"`｜`首行是否以数字开头(即混进了行号): false`。
+预期：`复制按钮数: 2`（两个代码块各一个）｜`按钮文字: 已复制`｜`复制到字符数` 大于 0｜`首行` 是 `"#include <bits/stdc++.h>"`｜`首行是否以数字开头(即混进了行号): false`｜**`写剪贴板抛错后按钮文字: 复制失败`**。
+
+**最后那条守的是「失败分支」，而前面几条一条都守不住它。** 前面把 `navigator.clipboard.writeText` 换成了**永远成功**的桩，所以 `catch` 那条路**从头到尾没被执行过**——把 `catch` 整个删掉、或者里面写成 `btn.textContent = '已复制'`，**上面五条断言逐字节不变**。
+
+- 这条分支不是装饰：剪贴板 API 在**非安全上下文**（`http://` 非 localhost）、**用户拒绝权限**、**页面失焦**时都会抛错，而博客是 `https://lsc188zq.github.io`，**用户从 http 链接跳进来或浏览器策略收紧时就会走到这里**。
+- 做法：把桩换成一个**抛错的**桩，再点一次同一个按钮。150 ms 足够 `await` 失败并落到 `catch`——注意上面那个 `setTimeout(…, 1500)` 会把文字复位成 `复制`，所以这两次点击必须在前一次点击的 1500 ms 之内完成，探针的时序已经保证（累计约 350 ms）。
+- 这条同时验证了**按钮被点过一次之后仍然可点**。
 
 **为什么这条不能省。** 行号是纯 CSS 计数器（`content: counter(line)`）生成的，**不是 DOM 文本**，所以 `code.textContent` 天然不含行号——但这恰恰是最容易被后人改坏的地方：哪天有人把行号改成真实的 DOM 元素，复制出来的每一行前面就会多一个数字，**而这种回归在截图里完全看不出来**（截图里两者长得一模一样）。这条探针一次验证三件事：按钮存在、点击真的调用了剪贴板、复制内容不含行号。
 
@@ -1911,10 +2044,28 @@ node scripts/shot.mjs "http://localhost:4321/tags" tags dark
 ```
 
 ```bash
-node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage();await p.goto('http://localhost:4321/tags');const items=await p.\$\$eval('.cloud-item',ns=>ns.map(n=>({href:n.getAttribute('href'),name:n.querySelector('.cloud-name').textContent})));console.log('标签数:',items.length);for(const i of items)console.log('  ',i.name,'->',i.href);console.log('出现双重编码(%25):',items.some(i=>i.href.includes('%25')));await p.click('.cloud-item');await p.waitForTimeout(300);console.log('跳转后 URL:',p.url());console.log('跳转后标题:',await p.textContent('.page-title'));console.log('标题与第一个标签一致:',(await p.textContent('.page-title'))===items[0].name);await b.close();})"
+node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage();await p.goto('http://localhost:4321/tags');const items=await p.\$\$eval('.cloud-item',ns=>ns.map(n=>({href:n.getAttribute('href'),name:n.querySelector('.cloud-name').textContent})));console.log('标签数:',items.length);for(const i of items)console.log('  ',i.name,'->',i.href);console.log('出现双重编码(%25):',items.some(i=>i.href.includes('%25')));await p.click('.cloud-item');await p.waitForTimeout(300);console.log('跳转后 URL:',p.url());console.log('跳转后标题:',await p.textContent('.page-title'));console.log('标题与第一个标签一致:',(await p.textContent('.page-title'))===items[0].name);for(const n of ['测试','公式','知识']){await p.goto('http://localhost:4321/tags/'+encodeURIComponent(n));await p.waitForTimeout(200);console.log('页 /tags/'+n+' -> 卡片数:',await p.\$\$eval('.card',x=>x.length),'| 标题:',await p.textContent('.page-title'));}await b.close();})"
 ```
 
-预期：`标签数: 2`；两个 `href` 都是**单次百分号编码**（形如 `/tags/%E6%B5%8B%E8%AF%95`）；`出现双重编码(%25): false`；`标题与第一个标签一致: true`。
+预期：`标签数: 2`；两个 `href` 都是**单次百分号编码**（形如 `/tags/%E6%B5%8B%E8%AF%95`）；`出现双重编码(%25): false`；`标题与第一个标签一致: true`；末尾三行**全部是 1**：
+
+```
+页 /tags/测试 -> 卡片数: 1 | 标题: #测试
+页 /tags/公式 -> 卡片数: 1 | 标题: #公式
+页 /tags/知识 -> 卡片数: 1 | 标题: #知识
+```
+
+**末尾三行不是凑数，而且必须是「三行」而不是「一行」。** 守的是 Step 2 里那段注释说的事（`getStaticPaths` 与 filter 都必须取「标签 ∪ 分类」的并集），而前面几条全都守不住它。过滤条件有两个半边，`/tags/<名字>` 这个路由由**同一个模板**同时服务标签和分类：
+
+| 坏法 | 知识页（分类半边） | 测试页（标签半边） | 前几条断言 |
+|---|---|---|---|
+| 漏 `\|\| p.data.category === tag` | **0 篇** ← 抓住 | 1 篇 | 全绿，守不住 |
+| 漏 `\|\| p.data.tags.includes(tag)` | 1 篇 | **0 篇** ← 抓住 | 全绿，守不住 |
+
+- 两种坏法下页面**照样渲染出来**（`getStaticPaths` 已经生成了路径），标题也**照样**是 `#知识` / `#测试`——所以 `标题与第一个标签一致: true` **两种都通过**；
+- **而这两种缺陷在别的标签页上完全看不出来**：全库只有 1 篇文章，标签「测试」页、标签「公式」页、分类「知识」页的篇数都是 1，**数字一样，坏掉与好着时输出相同**（第五次那个坑的变体）；
+- **只查「知识」一行是不够的**——那正是漏掉标签半边时唯一仍然读 1 的行。**两个半边各需要一行自己的证据**，所以三行缺一不可：`知识` 守分类半边，`测试`/`公式` 守标签半边（两个都写上是因为它们同为 1 篇，哪一个被漏掉都该现形）。
+- 判别力的来源：读数是 **1 才是对的**；任何一行出现 **0**，就说明它对应的那个半边被漏了。
 
 **为什么不写死「第一个一定是 `#测试`」**：标签云按「出现次数倒序、同次数按 `localeCompare(zh)`」排。样例的两个标签都是 1 篇，谁在前**取决于 Node 的 ICU 中文排序**（按拼音 测 cè 在 公 gōng 之前）——这条依赖是真的，但它不是本任务要验的东西，写死了会变成一个和 ICU 版本绑定的脆断言。真正要验的是**「没有被双重编码」**（`%25` 不出现）和**「点进去的标题和点的那一项对得上」**，这两条与排序无关。
 
@@ -2166,6 +2317,12 @@ test('normalizeHeadings 不改代码块里的井号', () => {
   const md = ['## 标题', '```cpp', '#define MAXN 10', '```'].join('\n');
   assert.equal(normalizeHeadings(md), md);
 });
+
+test('normalizeHeadings 的平移量按整篇算，不按代码块切开的段落各算各的', () => {
+  const md = ['### 题目描述', '', '```cpp', 'int x;', '```', '', '#### 细节'].join('\n');
+  const out = normalizeHeadings(md);
+  assert.equal(out, ['## 题目描述', '', '```cpp', 'int x;', '```', '', '### 细节'].join('\n'));
+});
 ```
 
 - [ ] **Step 9: 实现标题平移**
@@ -2179,31 +2336,47 @@ test('normalizeHeadings 不改代码块里的井号', () => {
  * 平移而非「一律上提一级」，是因为不同文档的起始层级不一致。
  */
 export function normalizeHeadings(md) {
-  return mapText(md, (text) => {
-    const lines = text.split('\n');
-    const levels = [];
-    for (const line of lines) {
+  const segs = splitSegments(md);
+
+  // 平移量必须**按整篇**算。这里不能走 mapText —— 它是按段落回调的，
+  // 而代码块会把文档切成好几段，每段各算一次 min 就会得到**各不相同**的 shift：
+  // 「### 描述」+代码+「#### 细节」两段分别平移后都落到 H2，**相对层级被抹平**。
+  // 已实测：该输入下 mapText 版输出 `## 描述` 与 `## 细节`，`### 细节` 丢失。
+  // 博客的目录是按标题层级画的大纲，层级被抹平等于目录结构是错的。
+  const levels = [];
+  for (const seg of segs) {
+    if (seg.type !== 'text') continue;
+    for (const line of seg.content.split('\n')) {
       const m = line.match(/^(#{1,6})\s/);
       if (m) levels.push(m[1].length);
     }
-    if (levels.length === 0) return text;
+  }
+  if (levels.length === 0) return md;
 
-    const shift = 2 - Math.min(...levels);
-    if (shift === 0) return text;
+  const shift = 2 - Math.min(...levels);
+  if (shift === 0) return md;
 
-    return lines
-      .map((line) => {
-        const m = line.match(/^(#{1,6})(\s.*)$/);
-        if (!m) return line;
-        const lv = Math.min(6, Math.max(1, m[1].length + shift));
-        return '#'.repeat(lv) + m[2];
-      })
-      .join('\n');
-  });
+  return segs
+    .map((seg) =>
+      seg.type === 'text'
+        ? seg.content
+            .split('\n')
+            .map((line) => {
+              const m = line.match(/^(#{1,6})(\s.*)$/);
+              if (!m) return line;
+              const lv = Math.min(6, Math.max(1, m[1].length + shift));
+              return '#'.repeat(lv) + m[2];
+            })
+            .join('\n')
+        : seg.content
+    )
+    .join('\n');
 }
 ```
 
-`mapText` 已经剥离了代码段，所以这里不必再判断围栏。
+`splitSegments` 已经把代码段摘出来了，所以这里不必再判断围栏——但**必须先切段、再统算 min、最后回填**，顺序反了就是我刚说的那个缺陷。
+
+（级别被 clamp 到 1~6：若一篇文档横跨 6 个以上层级，最深的几级会被压到一起。**已知且接受**——这种事在真实笔记里没出现过，且压缩只影响大纲最深处。）
 
 - [ ] **Step 10: 运行测试**
 
@@ -2211,7 +2384,7 @@ export function normalizeHeadings(md) {
 node --test test/
 ```
 
-预期：13 个测试全部 PASS。
+预期：14 个测试全部 PASS。
 
 - [ ] **Step 11: 写 slug 与摘要的失败测试**
 
@@ -2301,7 +2474,7 @@ export function makeSlug(filename) {
     .trim()
     .replace(/\s+/g, '-')
     // URL 中有歧义的字符（# 会被当成锚点，? 会被当成查询串）+ 文件系统非法字符
-    .replace(/[<>:"/\\|?*#%\u0000-\u001f]/g, '')
+    .replace(/[\p{Cc}<>:"/\\|?*#%]/gu, '')
     .replace(/-{2,}/g, '-')
     .replace(/^-+|-+$/g, '');
 }
@@ -2352,9 +2525,13 @@ export function extractDescription(md, max = 80) {
 node --test test/
 ```
 
-预期：22 个测试全部 PASS。
+预期：23 个测试全部 PASS。
 
-> **这套测试已经预先验证过**：计划编写阶段把上述实现完整跑过一遍，22 个用例全部通过（含端到端用例）。因此若你执行时看到失败，**大概率是实现被改动过**，而不是测试本身有问题。
+> **这套测试的验证状况（如实记录）**：计划编写阶段把**原始**实现跑通过一遍（22 个用例）。**但那个实现里 `normalizeHeadings` 是错的**——它经由 `mapText` 逐段落计算平移量，代码块把文档切开后每段各算各的 `shift`，相对层级会被抹平（详见 Step 9 的注释）。
+>
+> 控制器已把它改成「先切段、按整篇统算 min、再回填」，并新增第 14 个用例专门守这个缺陷。**新实现已在全部 23 个用例上重跑通过，且新用例在旧实现上确认失败（两个方向都实测过）**。上面那个 `extractDescription` 的实现与其它函数均未改动。
+>
+> 因此若你执行时看到失败，**大概率是实现被改动过，而不是测试本身有问题**。
 
 - [ ] **Step 14: 提交**
 
@@ -2563,6 +2740,21 @@ for (const rel of candidates) {
   });
 }
 
+// ---- slug 冲突检测 ----
+
+// 不同目录下的同名文件会产出同一个 slug（slug 只取文件名），后写的那篇会
+// **静默覆盖**先写的那篇——等于凭空丢一篇文章，而且没有任何报错。
+// 只警告不中断：一次小冲突不该挡住整次同步；警告至少让人当场看见。
+const bySlug = new Map();
+const collisions = [];
+for (const p of published) {
+  const prev = bySlug.get(p.slug);
+  if (prev) {
+    collisions.push(`${p.slug}: ${prev} ↔ ${p.rel}`);
+    console.warn(`[警告] slug 冲突: "${p.slug}" ← ${prev} 与 ${p.rel}，后者会覆盖前者`);
+  } else bySlug.set(p.slug, p.rel);
+}
+
 // ---- 写入 ----
 
 await fs.mkdir(OUT_DIR, { recursive: true });
@@ -2584,13 +2776,26 @@ for (const p of published) {
 }
 
 // 源文件取消标记或已删除 → 清理旧副本
+//
+// 但有一条硬前提：本轮扫描真的读到了东西。
+// listMarkdown 对读不到的目录是**静默跳过**的（vault.mjs 的 catch 里直接 return），
+// 所以 vaultPath 写错、换设备忘了改、目录被改名，都会让 candidates 变成空数组，
+// 于是 wanted 也空——清理循环就会把 src/content/blog/ 下所有非下划线文件判为多余并删掉。
+// 此时删掉的不是「用户取消发布的文章」，而是**全部已生成的文章**。
+// 这个状态和「一篇都没标记」在日志上几乎一样，区别只在后果。
+// 空扫描一律不清理：宁可留下过期的副本，也不要在一无所获的一轮里删东西。
 const removed = [];
-for (const f of existing) {
-  if (!f.endsWith('.md')) continue;
-  if (f.startsWith('_')) continue; // 下划线开头是手工样例，不动
-  if (!wanted.has(f)) {
-    await fs.rm(path.join(OUT_DIR, f));
-    removed.push(f);
+if (candidates.length === 0) {
+  console.log(`\n[已跳过清理] vault 目录不存在或白名单目录全空: ${vaultPath}`);
+  console.log('  检查 blog.config.json 里的 vaultPath 与磁盘上的实际路径是否逐字符一致。');
+} else {
+  for (const f of existing) {
+    if (!f.endsWith('.md')) continue;
+    if (f.startsWith('_')) continue; // 下划线开头是手工样例，不动
+    if (!wanted.has(f)) {
+      await fs.rm(path.join(OUT_DIR, f));
+      removed.push(f);
+    }
   }
 }
 
@@ -2601,6 +2806,10 @@ console.log(`  发布目录候选: ${candidates.length} 篇`);
 console.log(`  已标记发布:   ${published.length} 篇  (新增 ${added} / 更新 ${updated})`);
 console.log(`  已删除:       ${removed.length} 篇`);
 removed.forEach((f) => console.log(`    - ${f}`));
+if (collisions.length > 0) {
+  console.log(`  !! slug 冲突: ${collisions.length} 处（后者已覆盖前者，等于丢文章）`);
+  collisions.forEach((c) => console.log(`    ! ${c}`));
+}
 
 if (skipped.length > 0) {
   console.log(`\n  未标记 publish: true 而跳过: ${skipped.length} 篇`);
@@ -2613,22 +2822,53 @@ if (skipped.length > 0) {
 
 - [ ] **Step 4: 验证脚本能跑通（此时应为 0 篇）**
 
+**先记下博客内容目录当前的样子——这一步不能省，理由见下。**
+
+```bash
+ls -1 src/content/blog/
+```
+
 ```bash
 npm run sync
 ```
 
-预期：输出「已标记发布: 0 篇」，随后列出所有未标记的文件。**此时不应该有任何文件被写入 `src/content/blog/`。**
+```bash
+ls -1 src/content/blog/
+```
 
-若报 `vault 目录不存在`，检查 `blog.config.json` 里的 `vaultPath` 与磁盘上的实际路径是否逐字符一致。
+预期：输出「已标记发布: 0 篇」，随后列出所有未标记的文件；且**两次 `ls` 的输出逐字节相同**，其中包含 `_sample.md`。
 
-- [ ] **Step 5: 验证幂等性**
+
+**这个「临界状态」还有第二条到达路径，而且更危险。** `vaultPath` 写错时 `listMarkdown` 是**静默跳过**的（`vault.mjs` 里 `catch { return; }`），`candidates` 同样是空数组、`wanted` 同样空——但这一次目录里躺着的是**已经生成好的全部文章**，清理循环会把它们一次删光。所以 Step 3 的清理循环里加了一道守卫：**`candidates.length === 0` 时整段清理跳过，并打印 `[已跳过清理]`**。两条守卫各挡一个场景，**不能互相替代**：
+
+| 守卫 | 挡住的场景 |
+|---|---|
+| `if (f.startsWith('_')) continue;` | vault **读得到**、但一篇都没标记（就是上面这个场景）——保住 `_sample.md` |
+| `if (candidates.length === 0) { … } else { … }` | vault **读不到**（路径写错 / 目录改名）——保住全部已生成文章 |
+
+本轮 `candidates` 是 36（vault 读得到），所以走的是 `else` 分支，第一条守卫才是保 `_sample.md` 的那条。换过 `vaultPath` 之后第一次 `npm run sync`，务必确认日志里**没有** `[已跳过清理]`。
+**为什么必须对比前后两次 `ls`。** 这个脚本里有一段**会删文件**的清理逻辑：发布目录里不再出现的 slug，对应的副本会被 `fs.rm` 删掉。此刻 vault 里一篇都没标记，所以 `published` 是空的、`wanted` 是**空集合**——清理循环正好处于「把目录里所有 `.md` 都判为多余」的临界状态，**唯一挡住它的是那行 `if (f.startsWith('_')) continue;`**。
+
+- 只断言「已标记发布: 0 篇」**完全看不出这件事**：日志逐字一样，而 `_sample.md` 已经没了——T5/T6/T7/T8 的**全部夹具**都挂在它身上，后面的任务会在莫名其妙的报错里空转很久。
+- 这是本项目里**唯一一处破坏性操作**，跑之前先记快照是唯一能发现它的办法。
+- 若两次 `ls` 不同（尤其是少了 `_sample.md`），去查 `sync-vault.mjs` 清理循环里那行下划线守卫。
+
+若输出 `[已跳过清理] vault 目录不存在或白名单目录全空`，检查 `blog.config.json` 里的 `vaultPath` 与磁盘上的实际路径是否逐字符一致。**这条提示必须存在**：没有它的话，这条路径上的失败是**完全静默**的——`listMarkdown` 只是 `catch { return; }`，而「一篇都没扫描到」和「一篇都没标记」在日志上长得几乎一样，前者却会让清理循环删光 `src/content/blog/` 下所有非下划线文件。
+
+- [ ] **Step 5: 验证脚本可重复执行（**这一步不验证幂等性**，见下）**
 
 ```bash
 npm run build
 npm run sync
 ```
 
-预期：第二次 `npm run sync` 输出「新增 0 / 更新 0」（因为还没有已发布的文章，与第一次相同）。这一步是验证脚本不报错、可重复执行。
+预期：第二次 `npm run sync` 输出「新增 0 / 更新 0」。
+
+**为什么这一步不能叫「验证幂等性」——它证明不了。** 此刻 `published` 是空集，所以「新增 0 / 更新 0」**在脚本写坏了的时候也照样成立**：一个从来没写入过任何文件的脚本，第二次运行时当然还是新增 0。这是一条**没有判别力的断言**。
+
+它在这里唯一的作用是：确认脚本能重复执行、不报错、不抛异常。
+
+**真正的幂等性（第二次运行不改动任何已生成文件）与「清理逻辑真的会删」这两件事，都只有在有已发布文章之后才测得出来**，已作为 T11 的 Step 5 落实在那里——**不要因为这里写着「新增 0 / 更新 0」就以为已经验过了。**
 
 - [ ] **Step 6: 提交**
 
@@ -2754,7 +2994,53 @@ npm run sync
 
 若数量不符，看输出的「未标记 publish: true 而跳过」清单，找出漏标的文件。
 
-- [ ] **Step 5: 运行公式检查**
+- [ ] **Step 5: 验证幂等性与清理路径（这两条在 T10 阶段做不到，只能在这里做）**
+
+现在有 36 个真实文件了，两条**在 T10 时无法验证**的行为才测得出来。
+
+**5a. 幂等性：第二次运行必须一个字节都不改。**
+
+```bash
+find src/content/blog -name '*.md' | sort | xargs sha256sum > /tmp/probe-before.txt
+npm run sync
+find src/content/blog -name '*.md' | sort | xargs sha256sum > /tmp/probe-after.txt
+diff /tmp/probe-before.txt /tmp/probe-after.txt && echo '幂等：36 个文件逐字节未变'
+```
+
+预期：打印 `幂等：36 个文件逐字节未变`（`diff` 无输出、退出码 0），且 `npm run sync` 报 `新增 0 / 更新 0`。
+
+**这条和 T10 Step 5 的区别就是它存在的理由**：T10 时 `published` 是空集，「新增 0 / 更新 0」**在脚本彻底坏掉时也照样成立**。现在有 36 个真实文件，**只有真的判定了「内容没变就不写」才会是 0**。`sha256sum` 那一层更严——它连「改写了但字节相同」都不放过。
+
+**5b. 清理路径确实会删，而且只删该删的。**
+
+这一步**故意制造一次「取消发布」**。确定性挑选目标，不靠人眼：
+
+```bash
+SLUG=$(ls -1 src/content/blog/*.md | sort | head -1 | xargs -n1 basename | sed 's/\.md$//')
+SRC=$(grep -m1 '^sourcePath:' "src/content/blog/$SLUG.md" | sed 's/^sourcePath: *"//; s/"$//')
+echo "目标 slug: $SLUG"
+echo "vault 源文件: $SRC"
+```
+
+**去改 vault 里那个 `$SRC`**，把 `publish: true` 改成 `publish: false`，然后：
+
+```bash
+npm run sync
+echo "剩余文章数: $(ls -1 src/content/blog/*.md | wc -l)"        # 应为 35
+test -f "src/content/blog/$SLUG.md" && echo '!! 该篇没被删掉' || echo '清理生效：该篇已移除'
+```
+
+预期：`已删除: 1 篇`；文章数 **35**；打印 `清理生效：该篇已移除`。
+
+**最后把 `$SRC` 改回 `publish: true` 并重跑 `npm run sync`**，确认文章数回到 **36**，且该篇的 `sha256sum` 与 `/tmp/probe-before.txt` 里那一行**逐字符相同**（位置相同、哈希相同）。
+
+**为什么这条不能省。** 这是全项目**唯一一处破坏性操作**，而且到这一步为止**从没被执行过**：
+
+- 一次都没跑过的删除代码，和一段注释没有区别。它可能**永远不删**（`wanted` 的比较写反、`existing` 取在了写入之后、slug 算错导致集合对不上），也可能**删过头**。
+- **它删的不只是仓库里的文件**：发布模型是显式 opt-in，一篇笔记取消标记后如果副本还留在站点上，那是**私有内容继续公开可见**——不是排版问题，是内容泄露。这个项目的源 vault 里有不该公开的东西。
+- 先看 `sourcePath` 再动手，是为了确保改的是 **vault 里那个源文件**，而不是博客仓库里的副本。改错副本会在下次同步时被直接覆盖回来，**你会以为测试通过了**。
+
+- [ ] **Step 6: 运行公式检查**
 
 ```bash
 npm run check:math
@@ -2762,7 +3048,7 @@ npm run check:math
 
 预期：理想情况下「公式检查通过」。**更可能的情况是列出若干问题**——这些是源文件里真实存在的写法错误（例如孤立未闭合的 `$$`）。逐条回到 Obsidian 修正，然后重跑 `npm run sync` 与 `npm run check:math`，直到通过。
 
-- [ ] **Step 6: 构建并检查是否有 schema 错误**
+- [ ] **Step 7: 构建并检查是否有 schema 错误**
 
 ```bash
 npm run build
@@ -2770,7 +3056,63 @@ npm run build
 
 预期：构建成功。若报 `category` 校验失败，说明某个文件的目录没有匹配到 `categoryMap`，检查 `blog.config.json` 的目录拼写。
 
-- [ ] **Step 7: 截图抽查三篇**
+- [ ] **Step 8: 验证标签页在 36 篇语料下真的在过滤**
+
+**为什么只能在此时做**：T2–T10 期间全库只有 `_sample.md` 一篇。那时 `/tags/测试`、`/tags/公式`、`/tags/知识` 三个页面渲染的是同一张卡片——**「过滤生效」与「过滤被整个删掉」的产物逐字节相同**。T8 的实现者用变异实验实测过：把 `[tag].astro` 的 filter 换成 `() => true`（**完全忽略名字**），每个生成页面与正确实现逐字节一致，**所有断言全绿**。那是**射程**问题（断言测的地方和要防的缺陷不在同一处），成因是**语料规模**。36 篇到位后它才显形——所以这条检查的落点只能是这里。
+
+把下面的脚本写到 `.superpowers/sdd/2026-09-21-personal-blog/probe-tag-filter.mjs`（**不要写进仓库**，那个目录被 `.gitignore` 覆盖），先 `npm run preview`，另开终端再 `node` 跑它：
+
+```js
+// 验证标签页真的在过滤。语料只有一篇时这件事根本测不出来（见计划 T11 Step 8 的说明）。
+import { chromium } from 'playwright-core';
+
+const BASE = 'http://localhost:4321';
+const browser = await chromium.launch({ channel: 'msedge' });
+const p = await browser.newPage();
+let bad = 0;
+const check = (name, ok) => { if (!ok) bad++; console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}`); };
+
+// 1. 总览页：总篇数 + 每个标签的篇数。这一份来自 index.astro 的 counts，
+//    与 [tag].astro 的 filter 是两条不同的代码路径，所以可以互相对照。
+await p.goto(`${BASE}/tags`);
+const sub = await p.textContent('.page-sub');
+const total = Number(sub.match(/(\d+)\s*篇文章/)[1]);
+const items = await p.$$eval('.cloud-item', (ns) => ns.map((n) => ({
+  name: n.querySelector('.cloud-name').textContent.replace(/^#/, ''),
+  count: Number(n.querySelector('.cloud-count').textContent),
+})));
+
+check(`总览页报的总篇数 === 36（读到 ${total}）`, total === 36);
+check(`标签数 > 0（读到 ${items.length}）`, items.length > 0);
+// 标签含 `/` 时，PostCard 的 encodeURIComponent 会给出 /tags/C%2FC%2B%2B，
+// 而 Astro 按原始字符串建目录（tags/C/C++.html）——两者分叉，芯片静默 404。
+// category 是固定枚举（含 / 会在内容校验时直接报错），只有 tags 需要这条。
+check(`没有标签含 /（共 ${items.length} 个）`, items.every((i) => !i.name.includes('/')));
+
+// 2. 判别力前提：过滤若被整个删掉，每个详情页都会列出**全部** total 篇。
+//    所以必须存在一个不覆盖全部文章的标签，否则下面那组断言区分不出好坏
+//    —— T8 的变异实验 M8 就是这么漏过去的。
+const min = items.reduce((a, b) => (b.count < a.count ? b : a), items[0]);
+check(`存在不覆盖全部文章的标签（最少的是「${min.name}」= ${min.count}，总 ${total}）`, min.count < total);
+
+// 3. 逐个详情页核对卡片数 === 总览页报的篇数。取最少、最多、第一个，按名字去重。
+const picks = [...new Map([min, items[0], items[items.length - 1]].map((x) => [x.name, x])).values()];
+for (const it of picks) {
+  await p.goto(`${BASE}/tags/${encodeURIComponent(it.name)}`);
+  const cards = await p.$$eval('.card', (x) => x.length);
+  check(`/tags/${it.name} 卡片数 === ${it.count}（读到 ${cards}）`, cards === it.count);
+}
+
+await browser.close();
+console.log(bad ? `探针失败：${bad} 条` : '全部通过');
+if (bad) process.exit(1);
+```
+
+预期：全部 PASS。
+
+**这条也要求自证判别力**：把 `src/pages/tags/[tag].astro` 里 filter 的 `p.data.tags.includes(tag) || p.data.category === tag` 改成 `true`，重新 `npm run build` 并重跑本脚本，**必须看到第 2 条与第 3 条变红**（详情页会列出全部 36 篇，而总览页报的仍是各标签的真实篇数）。然后还原、重建、再跑一遍确认全绿。**看不到红就说明这条验证没有判别力，不要以「全绿」收尾。**
+
+- [ ] **Step 9: 截图抽查三篇**
 
 ```bash
 npm run preview
@@ -2790,7 +3132,7 @@ node scripts/shot.mjs "http://localhost:4321/" real-home dark
 
 对每篇确认：标题正确、日期不是今天、分类正确、公式渲染、代码块有行号和高亮。
 
-- [ ] **Step 8: 提交**
+- [ ] **Step 10: 提交**
 
 ```bash
 git add -A
@@ -2803,7 +3145,7 @@ git commit -m "feat: 首次迁移 36 篇文章并加入公式检查脚本"
 
 **Files:**
 - Create: `src/components/Search.astro`, `src/components/Comments.astro`
-- Modify: `package.json`（build 脚本追加 pagefind）、`src/layouts/BaseLayout.astro`（引入搜索）、`src/layouts/PostLayout.astro`（引入评论）
+- Modify: `package.json`（build 脚本追加 pagefind）、`src/layouts/BaseLayout.astro`（引入搜索）、`src/layouts/PostLayout.astro`（引入评论 + 给 `<article>` 加 `data-pagefind-body`）
 
 **Interfaces:**
 - Consumes: Task 11 生成的真实文章
@@ -2869,7 +3211,9 @@ git commit -m "feat: 首次迁移 36 篇文章并加入公式检查脚本"
 
   async function ensure() {
     if (!pagefind) {
-      pagefind = await import('/pagefind/pagefind.js');
+      // 构建期这个文件还不存在——pagefind 是在 astro build **跑完之后**才生成它的。
+      // @vite-ignore 让 Vite 别去解析这个路径，原样留给运行时按站点根路径去取。
+      pagefind = await import(/* @vite-ignore */ '/pagefind/pagefind.js');
       await pagefind.options({ excerptLength: 30 });
     }
     return pagefind;
@@ -2924,7 +3268,30 @@ import Search from '../components/Search.astro';
 "build": "astro build && pagefind --site dist",
 ```
 
-Pagefind 会扫描 `dist/` 里的 HTML，把索引写入 `dist/pagefind/`。它默认不索引带有 `data-pagefind-ignore` 的元素，且只收录 `<main>` 或 `<article>` 的内容——本项目的文章正文在 `<article>` 内，无需额外配置。
+Pagefind 会扫描 `dist/` 里的 HTML，把索引写入 `dist/pagefind/`。
+
+**必须显式圈定索引范围，别信「默认只收正文」。** Pagefind 官方文档原文是
+*"By default, Pagefind starts indexing from your `<body>` element."* —— 默认根是
+`<body>`，**不是** `<main>`，**也不是** `<article>`。而本站的 `<main class="shell">`
+（`BaseLayout.astro:39`）包住的不只是正文：首页/标签页/归档页的**卡片列表**、
+文章页的**目录**、**上一篇/下一篇**、**评论占位文案**，全都落在里面。
+
+不圈的后果：搜一个词，`/`、`/tags/知识`、`/archive` 的卡片列表**各自成为一条结果**
+并且排在文章前面；搜「giscus」会命中**全部**文章页（评论占位文案里就有这个词）。
+
+所以给 `src/layouts/PostLayout.astro` 的 `<article>` 加上 `data-pagefind-body`：
+
+```astro
+    <article data-pagefind-body>
+```
+
+文档原文正是推荐这个做法：*"if you tag your blog post layout with `data-pagefind-body`,
+other pages like your homepage will no longer appear in search results. **This is
+usually what you want.**"* 目录、上下篇、评论占位都是 `<article>` 的**兄弟节点**，
+自动被排除，不需要再逐个加 `data-pagefind-ignore`。
+
+**代价（知情接受）**：首页、标签页、关于页从此不出现在搜索结果里。哪天想让关于页可搜，
+给它也加一个 `data-pagefind-body` 即可。
 
 - [ ] **Step 3: 验证搜索**
 
@@ -2939,10 +3306,19 @@ npm run preview
 另开终端：
 
 ```bash
-node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage();const errs=[];p.on('pageerror',e=>errs.push(String(e)));await p.goto('http://localhost:4321/');await p.fill('#search-input','动态规划');await p.waitForTimeout(1800);const n=await p.\$\$eval('.sr-item',x=>x.length);const first=await p.textContent('.sr-item .sr-title').catch(()=>'(无)');console.log('结果数:',n,'| 首条:',first);console.log('页面错误:',errs.length?errs:'无');await p.screenshot({path:'.shots/search.png'});await b.close();})"
+node -e "import('playwright-core').then(async({chromium})=>{const b=await chromium.launch({channel:'msedge'});const p=await b.newPage();const errs=[];p.on('pageerror',e=>errs.push(String(e)));await p.goto('http://localhost:4321/');const title=(await p.textContent('.card-title')).trim();const q=title.slice(0,4);await p.fill('#search-input',q);await p.waitForTimeout(2000);const paths=await p.\$\$eval('.sr-item',xs=>xs.map(x=>new URL(x.href).pathname));console.log('查询词:',q,'| 结果数:',paths.length);console.log('结果路径:',JSON.stringify(paths));console.log('全部是文章页:',paths.length>0&&paths.every(u=>u.startsWith('/posts/')));console.log('页面错误:',errs.length?errs:'无');await p.screenshot({path:'.shots/search.png'});await b.close();})"
 ```
 
-预期：`结果数` > 0，`页面错误: 无`。若结果数为 0，先确认 `dist/pagefind/` 目录存在；若不存在，说明 `pagefind` 未正确安装或 build 脚本没生效。
+预期：`结果数` > 0、**`全部是文章页: true`**、`页面错误: 无`。
+
+- **`全部是文章页` 才是能分辨配置对错的那一条。** 忘了给 `<article>` 加 `data-pagefind-body`
+  时，`结果路径` 里会出现 `/`、`/tags/...`、`/archive`，它变 `false`；而 `结果数` 那一条
+  **配错时一样为真**——首页和各标签页的卡片列表本身就够凑出一个正数。
+  **只断言 `结果数 > 0` 等于没断言。**
+- 查询词是从首页第一张卡的标题里**现取**的前 4 个字，不写死。写死（比如 `'动态规划'`）
+  就会引入一个没人验证过的依赖：「那 36 篇里到底有没有这个词」。
+- 若 `结果数: 0`，先看打印出来的 `查询词` 是不是不足 2 个字（输入框在 `q.length < 2` 时
+  直接不搜）；再看 `dist/pagefind/` 目录是否存在。不存在说明 `pagefind` 没装好或 build 脚本没生效。
 
 - [ ] **Step 4: 创建评论组件**
 
@@ -3153,10 +3529,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
+      - name: 把 lockfile 里的 tarball 主机改回 npmjs（原因见下方说明）
+        run: node -e "const fs=require('fs');const p='package-lock.json';fs.writeFileSync(p,fs.readFileSync(p,'utf8').replaceAll('registry.npmmirror.com','registry.npmjs.org'))"
       - run: npm ci
       - run: npm run build
       - uses: actions/upload-pages-artifact@v3
@@ -3171,10 +3550,28 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
 ```
 
 `npm ci` 要求仓库里有 `package-lock.json`。**确认它已被提交**（`.gitignore` 里不能有它）。
+
+> **为什么 `npm ci` 前面有一句改写：lockfile 里的 tarball 主机指向中国镜像。**
+>
+> `package-lock.json` 里 **512 个** `resolved` 全部是 `registry.npmmirror.com`（国内镜像，本机 npm 配置）。而 GitHub Actions 的 runner 在美国。问题是：`npm ci` 到底照 lockfile 的 `resolved` 拉，还是按配置的 registry 重新推导？
+>
+> **实测过：照 `resolved` 拉。** 判据实验 —— 把 lockfile 里的主机整体换成一个**不存在的域名**再真装，退出码 1、`attempt 3 failed with ENOTFOUND`，说明它真的去请求了那个假域名。**所以 `npm ci --registry=https://registry.npmjs.org/` 这类写法救不了**，必须改 lockfile 本身。不加这一步，首次部署会全部走中国 CDN：慢、可能超时，**而且报错长得跟真正的原因毫无关系**。
+>
+> 那句 `node -e` 把主机改回 `registry.npmjs.org`。它**不依赖 npm 的任何语义**——不管理论上 npm 会不会自动替换主机，改完之后这个问题不存在了。改的只有主机名：实测 512 处全替换，把主机名换回去后与原文**逐字节相同**，`integrity` 与版本一字未动，所以校验和仍然成立。
+>
+> **为什么是 `node -e` 而不是更短的 `sed -i`：两者的行为在两端不一样。** Git Bash 的 `sed` 会按文本模式打开文件，**顺手把 lockfile 里 7461 处 CRLF 全转成 LF**（本机实测）；CI 的 Linux `sed` 不会。也就是说「本机验过」这句话**不能转移**到 CI —— 我验的是 A 工具，跑的是 B 工具。`node` 读写字节、不做任何换行转换，两端行为一致，本机的验证结论才算数。
+>
+> 顺带两条，都是实测踩出来的，留着免得以后重新想一遍：
+> - **`npm ci --dry-run` 对这件事没有判别力**：空 `node_modules` 下它秒回 `up to date`、退出码 0、网络一行不碰，在「用 resolved」和「用 registry」两种情况下**逐字相同**。
+> - **测 npm 的网络行为必须给一个空的 `--cache` 目录**，否则 npm 按 integrity 哈希命中本机缓存，日志里全是 `(cache hit)`，被测的主机从头到尾没被请求过，实验等于没做。
+>
+> `cache: npm` 那行的缓存键是按**改写前**的 lockfile 算的，但这不影响正确性：npm 的缓存按 tarball 的 integrity（sha512）寻址，而改的只是主机名，哈希不变。
+>
+> **如果将来不想要这一步**：`npm config set registry https://registry.npmjs.org/` 之后删掉 `package-lock.json` 重跑 `npm install`，让 lockfile 原生指向 npmjs。代价是以后本机装包也走官方源（国内会慢）。本项目的既定选择是**保留镜像 + CI 里改写**。
 
 - [ ] **Step 4: 本地完整构建验证**
 

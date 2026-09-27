@@ -1,0 +1,54 @@
+---
+import { CATEGORIES } from '../constants';
+---
+<div class="cfilter" id="cfilter">
+  <button class="cf-btn is-on" data-cat="__all__" type="button">全部</button>
+  {CATEGORIES.map((c) => <button class="cf-btn" data-cat={c} type="button">{c}</button>)}
+</div>
+
+<style>
+  .cfilter {
+    display: flex;
+    gap: 8px;
+    padding: 18px 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .cfilter::-webkit-scrollbar { display: none; }
+  .cf-btn {
+    flex: 0 0 auto;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--mu);
+    background: transparent;
+    border: 1px solid var(--bd);
+    border-radius: 6px;
+    padding: 4px 12px;
+    cursor: pointer;
+    transition: color .15s, border-color .15s, background .15s;
+  }
+  .cf-btn:hover { color: var(--tx); }
+  .cf-btn.is-on { color: var(--ac); border-color: var(--ac); background: var(--chip); }
+</style>
+
+<script>
+  const bar = document.getElementById('cfilter');
+  const cards = Array.from(document.querySelectorAll('.card'));
+  const status = document.getElementById('list-status');
+
+  bar?.addEventListener('click', (e) => {
+    const btn = e.target.closest('.cf-btn');
+    if (!btn) return;
+    const cat = btn.dataset.cat;
+
+    bar.querySelectorAll('.cf-btn').forEach((b) => b.classList.toggle('is-on', b === btn));
+
+    let shown = 0;
+    for (const c of cards) {
+      const ok = cat === '__all__' || c.dataset.category === cat;
+      c.hidden = !ok;
+      if (ok) shown++;
+    }
+    if (status) status.textContent = cat === '__all__' ? `共 ${shown} 篇` : `${cat} · ${shown} 篇`;
+  });
+</script>

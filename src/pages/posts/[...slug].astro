@@ -1,18 +1,26 @@
 ---
 import { getCollection, render } from 'astro:content';
-import BaseLayout from '../../layouts/BaseLayout.astro';
-import '../../styles/prose.css';
+import PostLayout from '../../layouts/PostLayout.astro';
 
 export async function getStaticPaths() {
-  const posts = await getCollection('blog');
-  return posts.map((post) => ({ params: { slug: post.id }, props: { post } }));
+  const posts = (await getCollection('blog', ({ data }) => !data.draft))
+    .sort((a, b) => a.data.date.getTime() - b.data.date.getTime());
+
+  return posts.map((post, i) => ({
+    params: { slug: post.id },
+    props: {
+      // 必须传原始的 collection entry 对象，不能拆成 { id, data, body } 再传。
+      // render() 需要完整的 entry，拆开会报错。
+      post,
+      prev: posts[i - 1] ? { id: posts[i - 1].id, title: posts[i - 1].data.title } : undefined,
+      next: posts[i + 1] ? { id: posts[i + 1].id, title: posts[i + 1].data.title } : undefined,
+    },
+  }));
 }
 
-const { post } = Astro.props;
-const { Content } = await render(post);
+const { post, prev, next } = Astro.props;
+const { Content, headings } = await render(post);
 ---
-<BaseLayout title={post.data.title} description={post.data.description}>
-  <h1>{post.data.title}</h1>
-  <p>分类：{post.data.category} · 标签：{post.data.tags.join(', ')}</p>
-  <article class="prose"><Content /></article>
-</BaseLayout>
+<PostLayout post={post} headings={headings} prev={prev} next={next}>
+  <Content />
+</PostLayout>

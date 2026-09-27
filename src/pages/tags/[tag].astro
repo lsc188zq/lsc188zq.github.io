@@ -1,0 +1,48 @@
+---
+import { getCollection } from 'astro:content';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import PostCard from '../../components/PostCard.astro';
+
+export async function getStaticPaths() {
+  const posts = await getCollection('blog', ({ data }) => !data.draft);
+  // 这个路由同时服务于「标签」和「分类」两类链接。
+  //
+  // 首页卡片的分类芯片（PostCard 里的 .card-cat）指向 /tags/<分类名>，
+  // 但 category 和 tags 是 schema 里两个互不相干的字段——只收 tags 的话，
+  // **每一张卡片上的分类芯片都会 404**，而且 T13 之前还没有 404 页面兜着。
+  // 所以这里取两者的并集。
+  const names = [...new Set(posts.flatMap((p) => [...p.data.tags, p.data.category]))];
+  return names.map((tag) => ({ params: { tag } }));
+}
+
+const { tag } = Astro.params;
+// 同理，命中条件是「是标签」或「是分类」。两者同名时并集已去重，不会重复渲染。
+//
+// 注：Astro.params.tag 在类型上是 string | undefined。这里不需要处理 undefined
+// ——getStaticPaths 生成的每个路径都带 tag。编辑器里的 TS 报错就是它，
+// npm run build 不跑类型检查，不会因此失败。
+const posts = (await getCollection('blog', ({ data }) => !data.draft))
+  .filter((p) => p.data.tags.includes(tag) || p.data.category === tag)
+  .sort((a, b) => b.data.date.getTime() - a.data.date.getTime());
+---
+<BaseLayout title={`#${tag}`}>
+  <h1 class="page-title">#{tag}</h1>
+  <p class="page-sub"><a href="/tags">← 全部标签</a> · {posts.length} 篇</p>
+  <div>
+    {posts.map((p) => (
+      <PostCard
+        id={p.id}
+        title={p.data.title}
+        date={p.data.date}
+        category={p.data.category}
+        tags={p.data.tags}
+        description={p.data.description}
+      />
+    ))}
+  </div>
+</BaseLayout>
+
+<style>
+  .page-title { font-size: 24px; font-weight: 700; margin: 0 0 8px; font-family: var(--mono); }
+  .page-sub { font-family: var(--mono); font-size: 11.5px; color: var(--fa); margin: 0 0 24px; }
+</style>

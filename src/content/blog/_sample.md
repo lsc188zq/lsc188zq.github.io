@@ -43,3 +43,57 @@ int main() {
 #### 四级标题
 
 ### 另一个三级标题
+
+## 超长代码折叠测试
+
+```cpp
+#include <bits/stdc++.h>
+using namespace std;
+
+const int MAXN = 100005;
+int n, m;
+long long a[MAXN], tree[MAXN];
+
+inline int lowbit(int x) {
+    return x & (-x);
+}
+
+void update(int i, long long delta) {
+    while (i <= n) {
+        tree[i] += delta;
+        i += lowbit(i);
+    }
+}
+
+long long query(int i) {
+    long long sum = 0;
+    while (i > 0) {
+        sum += tree[i];
+        i -= lowbit(i);
+    }
+    return sum;
+}
+
+int main() {
+    ios::sync_with_stdio(false);
+    cin.tie(nullptr);
+
+    cin >> n >> m;
+    for (int i = 1; i <= n; i++) {
+        cin >> a[i];
+        update(i, a[i]);
+    }
+
+    while (m--) {
+        int op, x, y;
+        cin >> op >> x >> y;
+        if (op == 1) {
+            update(x, y);
+        } else {
+            cout << query(y) - query(x - 1) << '\n';
+        }
+    }
+
+    return 0;
+}
+```
