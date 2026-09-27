@@ -2904,7 +2904,7 @@ git commit -m "feat: 同步脚本 CLI 与配置文件"
 **Files:**
 - Create: `scripts/check-math.mjs`
 - Delete: `src/content/blog/_sample.md`
-- Modify: Obsidian vault 中 36 个文件的 frontmatter（加 `publish: true`）
+- Create: Obsidian vault 中 36 个文件**新建** frontmatter（实测 0/36 已有，见 Step 2）
 
 **Interfaces:**
 - Consumes: Task 10 的 `npm run sync`
@@ -2976,27 +2976,78 @@ process.exit(1);
 
 - [ ] **Step 2: 在 vault 里标记要发布的文件**
 
-在 Obsidian 中打开下列路径下的 36 个文件，在**文件最开头**加入 frontmatter：
+**实测前提（逐字节扫过 36 篇）：它们一篇都没有 YAML frontmatter**——0/36 以 `---` 开头，0/36 带 BOM。它们的标签写在**正文第一行**（26/36 篇，形如 `#DP #单调队列`）。所以这一步是**新建** frontmatter，不存在「往已有的块里加」的情况。
 
-```yaml
----
-publish: true
----
-```
+要标的 5 处在白名单 `publishDirs` 里，共 36 篇：
 
-对应目录与数量：
-
-| 目录 | 篇数 |
+| 白名单条目 | 篇数 |
 |---|---|
 | `OI/算法/` 及其子目录 | 24 |
 | `OI/游记/` | 4 |
 | `文集/` | 3 |
 | `项目/游戏/三眼枪/` | 4 |
-| `学习/深度学习.md` | 1 |
+| `学习/深度学习/`（目录；里面的文件是 `张量以及张量操作.md`） | 1 |
 
 **明确不标记的目录**：`OI/资料`、`OI/出题`、`OI/每日总结`、`任务/`、`docs/`、`日志/`、`简历/`、`回答.md`、`学习/光纤传感`。这些不在 `publishDirs` 白名单里，即使误加 `publish: true` 也不会被同步——**这是白名单和标记双重把关的意义**。
 
-> 若某个文件已有 frontmatter，把 `publish: true` 加进去即可，不要新开一个 `---` 块。
+**不要手点 36 次。** 手工编辑的出错方式**全是静默的**，下面四条**实测**（不是推测）：
+
+| 你写的 | gray-matter 读到的 | 后果 |
+|---|---|---|
+| `publish: "true"`（带引号） | 字符串 `"true"` | 脚本用的是**严格相等** `parsed.data.publish !== true`（本计划 2725 行），该篇**被静默跳过**，你会以为是自己漏标了 |
+| `publish: yes` / `publish: 是` | 字符串 | 同上 |
+| `publish: True` / `publish: TRUE` | 布尔 `true` | 正常 |
+| `tags: #DP #树形DP` | `null`——YAML 里 `#` 是**注释起点** | **标签全丢，且不报错**：正文里没有了，`?? vaultTags` 也接不住 |
+
+最后一条尤其要说清：**不要把正文第一行的标签搬进 frontmatter**。让它留在正文里，由 `splitLeadingTags` 采集（设计文档第 7 项）。frontmatter 里只写 `publish: true` 这一行。
+
+用下面这个脚本（写到 `.superpowers/sdd/2026-09-21-personal-blog/mark-publish.mjs`，**不要写进仓库**）：
+
+```js
+// 一次性工具：给 vault 里 publishDirs 白名单下的笔记插入 publish: true。
+// 复用 scripts/lib/vault.mjs 的 listMarkdown，保证「本脚本标记的文件集」与
+// 「同步脚本会看的文件集」不可能漂移。
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { listMarkdown } from '../../scripts/lib/vault.mjs';
+
+const cfg = JSON.parse(await fs.readFile('blog.config.json', 'utf8'));
+const VAULT = cfg.vaultPath;
+const git = (args) => execFileSync('git', ['-C', VAULT, ...args], { encoding: 'utf8' });
+
+// 前置①：vault 工作区必须干净。否则回滚时 git checkout 会连你自己的编辑一起抹掉。
+const dirty = git(['status', '--porcelain']).trim();
+if (dirty) { console.error('vault 有未提交的改动，先处理掉：\n' + dirty); process.exit(1); }
+
+const targets = [];
+for (const dir of cfg.publishDirs) targets.push(...(await listMarkdown(VAULT, dir)));
+console.log('白名单下共 ' + targets.length + ' 个 .md');
+if (targets.length !== 36) { console.error('预期 36 篇，读到 ' + targets.length + ' 篇——先查清再动手'); process.exit(1); }
+
+// 前置②：全部读通、全部算好，再开始写。写到一半失败会留下半成品。
+const rows = [];
+const already = [];
+for (const rel of targets) {
+  const abs = path.join(VAULT, rel);
+  const raw = await fs.readFile(abs, 'utf8');
+  if (raw.charCodeAt(0) === 0xfeff) { console.error(rel + ' 带 BOM，本脚本不处理'); process.exit(1); }
+  if (raw.startsWith('---')) { already.push(rel); continue; }
+  rows.push({ abs, next: '---\npublish: true\n---\n' + raw });
+}
+// 有已存在的 frontmatter 就停下：在最前面再插一个 --- 块会造出**两个**块，
+// gray-matter 只认第一个，第二个会变成正文里的可见垃圾。
+if (already.length) { console.error('这 ' + already.length + ' 篇已有 frontmatter，停手：\n' + already.join('\n')); process.exit(1); }
+
+for (const r of rows) await fs.writeFile(r.abs, r.next, 'utf8');
+console.log('已标记 ' + rows.length + ' 篇');
+console.log('vault 侧改动：' + git(['diff', '--shortstat']).trim());
+console.log('回滚：git -C "' + VAULT + '" checkout -- .');
+```
+
+**三条前置检查都不是装饰**，它们分别挡住「回滚会误伤你自己的未提交编辑」「文件集漂移（不是 36 篇）」「造出两个 frontmatter 块」。**脚本报错时不要绕过它去改数字**——先查清为什么。
+
+`publish: true` 同时是你**以后的控制开关**：想撤下某篇，把它改成 `publish: false`（或删掉这一行），下次 `npm run sync` 就会把站点上的副本删掉。这条路径在 Step 5b 会被**故意执行一次**来做真验证。
 
 - [ ] **Step 3: 删除样例文章**
 
@@ -3012,7 +3063,66 @@ npm run sync
 
 预期：`已标记发布: 36 篇 (新增 36 / 更新 0)`。
 
-若数量不符，看输出的「未标记 publish: true 而跳过」清单，找出漏标的文件。
+**数量不符时先分清是哪一种**——两种成因的表现完全不同，修法也完全不同：
+
+- 「未标记 publish: true 而跳过」清单里**有**它 → 标记没生效。去查它的 frontmatter 是不是写成了 `publish: "true"`（带引号）或 `publish: yes`：**实测这两种会被静默跳过**（Step 2 的表）。
+- 两个清单里**都没有**它 → 它根本不在 `publishDirs` 白名单里。`listMarkdown` 把 `fs.readdir` 的异常**静默吞掉了**（`catch { return; }`），所以白名单路径拼错时**不报错，只是少几篇**，而且这个文件不会出现在任何清单里让你去查。核 `blog.config.json` 的路径拼写。
+
+**再验证标签整条链路真的通了。** 这是 T10 留下的一条**如实记录的盲区**：那时 `published` 是空集，`splitLeadingTags` 的调用点在 `continue` 之后、一次都不会执行，所以「同步脚本真的调用了它」在 T10 期间**无法验证**——只能在这里验。
+
+写到 `.superpowers/sdd/2026-09-21-personal-blog/probe-tags-e2e.mjs`（**不要写进仓库**）：
+
+```js
+// 验证标签从 vault 正文首行 → frontmatter.tags → 正文里不再出现，这条链路真的通了。
+import fs from 'node:fs/promises';
+import matter from 'gray-matter';
+import { splitLeadingTags } from '../../../scripts/lib/transform.mjs';
+
+const DIR = 'src/content/blog';
+const files = (await fs.readdir(DIR)).filter((f) => f.endsWith('.md'));
+let bad = 0;
+const check = (name, ok, extra) => { if (!ok) bad++; console.log((ok ? 'PASS  ' : 'FAIL  ') + name + (extra || '')); };
+
+check('文章总数 === 36', files.length === 36, '（读到 ' + files.length + '）');
+
+// 每篇的 sourcePath 必须落在这 5 个白名单条目下。写成「等于它、或它后面跟一个 /」，
+// 避免 `文集备份/` 这种名字被 `startsWith('文集')` 误判为合规。
+const WHITELIST = ['OI/算法', 'OI/游记', '文集', '项目/游戏/三眼枪', '学习/深度学习'];
+let withTags = 0;
+const stray = [];
+const leftovers = [];
+const tagDesc = [];
+for (const f of files) {
+  const { data, content } = matter(await fs.readFile(DIR + '/' + f, 'utf8'));
+  const tags = Array.isArray(data.tags) ? data.tags : [];
+  if (tags.length) withTags++;
+  const sp = typeof data.sourcePath === 'string' ? data.sourcePath : '';
+  if (!WHITELIST.some((d) => sp === d || sp.startsWith(d + '/'))) stray.push(f + ' → ' + JSON.stringify(sp));
+  // 把同步脚本用过的**同一个函数**再跑一遍生成后的正文：还有东西可剥，就说明当时没剥。
+  // 这比自己写正则判断强——判据只有一份，不会跟实现漂移。
+  const again = splitLeadingTags(content).tags;
+  if (again.length) leftovers.push(f + ' → ' + JSON.stringify(again));
+  if (typeof data.description === 'string' && /^(#[^\s#]+\s*)+$/.test(data.description.trim())) tagDesc.push(f);
+}
+
+check('带标签的文章数 === 26', withTags === 26, '（读到 ' + withTags + '）');
+check('没有一篇来自白名单之外的目录', stray.length === 0, stray.length ? '\n      ' + stray.join('\n      ') : '');
+check('没有一篇正文还留着标签行', leftovers.length === 0, leftovers.length ? '\n      ' + leftovers.join('\n      ') : '');
+check('没有一篇的摘要还是标签串', tagDesc.length === 0, tagDesc.length ? '\n      ' + tagDesc.join('\n      ') : '');
+
+console.log(bad ? '探针失败：' + bad + ' 条' : '全部通过');
+if (bad) process.exit(1);
+```
+
+预期：`全部通过`，五条检查的读数是 **36 / 26 / 0 / 0 / 0**（文章总数 / 带标签的篇数 / 正文残留标签行 / 摘要仍是标签串 / 来自白名单之外目录的篇数）。
+
+**最后那一条是隐私断言，不是形式主义。** `sourcePath` 就写在每篇生成文件的 frontmatter 里，白拿。它的意义是：**「36 篇」这个数字对，不等于「对的 36 篇」**——白名单拼错、或某个 `publish: true` 加在了不该加的地方（比如 `简历/` 下），数量都可能照样是 36 或者差一点。这条断言把「哪 36 篇」钉死，比人眼过一遍标题可靠。**它红了就是硬故障，停下来查清，不要靠改数字过。**
+
+**为什么这三条非做不可。** 它们各自对应一种**实测过**的失败方式，而且**没有一个是崩溃**：
+
+- 26/36 篇的标签行若没被剥掉，会作为 `<p>#DP #单调队列</p>` **显示在文章正文里**。我用 Astro 自己的 markdown 管线（`@astrojs/markdown-remark`）渲染验证过：CommonMark 要求 `#` 后有空格才算标题，所以 `#DP #单调队列` 是**普通段落，可见**（而 `## 题目描述` 是真标题，不受影响）。
+- 8/36 篇的**卡片摘要会整条变成标签串**（如 `#DP #双连通分量 #组合计数`）——`extractDescription` 的跳过规则同样要求 `#` 后有空格，所以它挑中了这一行。
+- 症状都只是「页面变丑」，没有任何报错。**不靠读数发现不了。**
 
 - [ ] **Step 5: 验证幂等性与清理路径（这两条在 T10 阶段做不到，只能在这里做）**
 
