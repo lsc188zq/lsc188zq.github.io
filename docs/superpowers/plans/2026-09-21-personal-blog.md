@@ -3128,6 +3128,18 @@ process.exit(1);
 
 **实测前提（逐字节扫过 36 篇）：它们一篇都没有 YAML frontmatter**——0/36 以 `---` 开头，0/36 带 BOM。它们的标签写在**正文第一行**（26/36 篇，形如 `#DP #单调队列`）。所以这一步是**新建** frontmatter，不存在「往已有的块里加」的情况。
 
+**动手前又当场量了一遍**（这五条都不是沿用旧读数，是本次派发前现测的）：
+
+| 量什么 | 读数 | 为什么要量 |
+|---|---|---|
+| vault 是不是 git 仓库、工作树干不干净 | 干净，**0 处未提交改动** | 回滚路径 `git checkout -- .` 才有意义。你自己没提交的编辑会被一起抹掉 |
+| 36 篇能被 git 认到首次提交日期吗 | **36 / 36**，全是 `2026-07-05` | 拿不到就会掉进 mtime 兜底，日期语义完全不同 |
+| 有文件被 `.gitignore` 匹配吗 | **0** | 被忽略的文件 git 视而不见，但 `listMarkdown` 照样收得到——它会没有 git 历史 |
+| `makeSlug` 产出空串的 | **0** | 空 slug 会写出点文件 `.md`，Astro 静默不收 |
+| 36 个 slug 有撞车吗 | **0**（36 个去重后仍是 36 个） | 撞车会让后写的**静默覆盖**先写的，等于凭空丢一篇 |
+
+**关于行尾**：vault 的文件是 **CRLF**（实测）。插入的 frontmatter 用 LF，于是文件内混排——**已实测这无害**：`gray-matter` 读得到 `publish: true`，`^publish: true$` 这类锚点能匹配（JS 的 `$` 把 `\r` 认作行终止符），且「改成 false 再改回 true」与原文**逐字节相同**。所以 5b 的还原不会留下行尾的痕迹。
+
 要标的 5 处在白名单 `publishDirs` 里，共 36 篇：
 
 | 白名单条目 | 篇数 |
@@ -3160,7 +3172,7 @@ process.exit(1);
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { listMarkdown } from '../../scripts/lib/vault.mjs';
+import { listMarkdown } from '../../../scripts/lib/vault.mjs';
 
 const cfg = JSON.parse(await fs.readFile('blog.config.json', 'utf8'));
 const VAULT = cfg.vaultPath;
@@ -3226,7 +3238,7 @@ npm run sync
 // 验证标签从 vault 正文首行 → frontmatter.tags → 正文里不再出现，这条链路真的通了。
 import fs from 'node:fs/promises';
 import matter from 'gray-matter';
-import { splitLeadingTags } from '../../../scripts/lib/transform.mjs';
+import { splitLeadingTags, extractDescription } from '../../../scripts/lib/transform.mjs';
 
 const DIR = 'src/content/blog';
 const files = (await fs.readdir(DIR)).filter((f) => f.endsWith('.md'));
@@ -3260,11 +3272,103 @@ check('没有一篇来自白名单之外的目录', stray.length === 0, stray.le
 check('没有一篇正文还留着标签行', leftovers.length === 0, leftovers.length ? '\n      ' + leftovers.join('\n      ') : '');
 check('没有一篇的摘要还是标签串', tagDesc.length === 0, tagDesc.length ? '\n      ' + tagDesc.join('\n      ') : '');
 
+// —— 第二组：生成出来的 frontmatter 本身 ——
+//
+// 这一组补的是 T10 留下的一条**比我原先说的更宽**的盲区。T10 时 published 是空集，
+// 没有被执行的不止标签那一行：`categoryFor`、`buildFrontmatter`、slug 计算、日期链
+// **一次都没跑过**。所以「36 篇都在」只能证明搬运算术对，不能证明每篇的字段对。
+//
+// 假定：vault 的 frontmatter 里没有 category / date / description（T11 只写 publish: true）。
+// 若你以后手工往 vault 里加了这些字段，本组可能变红——那是**探针按预期工作**（脚本会把
+// `parsed.data.date` 原样写出去，而 YAML 里的日期在 JS 里是 Date 对象），改探针前先看清是哪种。
+const CATEGORIES = ['知识', '技术', '项目', '书单', '游记', '杂谈'];
+const badDate = [];
+const badCat = [];
+const badSlug = [];
+const badDesc = [];
+const catCount = {};
+for (const f of files) {
+  const raw = await fs.readFile(DIR + '/' + f, 'utf8');
+
+  // date 必须看**原始字节**，不能看解析结果：YAML 把 `2026-07-05` 读成时间戳，
+  // gray-matter 交回来的是 Date 对象，从对象上看不出写进去的是不是 YYYY-MM-DD。
+  // 这条防的是回退路径把机器相关的字符串写进**公开仓库**：
+  //   date: Sun Jul 05 2026 08:00:00 GMT+0800 (中国标准时间)
+  // 那样的字节随机器与时区变，同一份 vault 在两台机器上会同步出不同的文件。
+  const m = raw.match(/^date: (.*)$/m);
+  if (!m || !/^\d{4}-\d{2}-\d{2}$/.test(m[1].trim())) {
+    badDate.push(f + ' → ' + (m ? JSON.stringify(m[1]) : '(没有 date 行)'));
+  }
+
+  const { data, content } = matter(raw);
+  if (!CATEGORIES.includes(data.category)) badCat.push(f + ' → ' + JSON.stringify(data.category));
+  catCount[data.category] = (catCount[data.category] ?? 0) + 1;
+
+  // 空 slug 会写出点文件 `.md`。Astro 的 glob 不收集点文件，那篇**静默不出现**——
+  // 没有任何报错，只是站点上少一篇。
+  if (f === '.md' || f.slice(0, -3).trim() === '') badSlug.push(f);
+
+  // description 用**同一个函数**对生成后的正文再算一遍，两边必须逐字符一致。
+  // 「算出来是空串」是合法的（schema 里 description 是 optional），不一致才是故障——
+  // 那意味着脚本当时是对**另一份正文**算的（比如没剥标签的那份、或剥标签前的原文）。
+  const again2 = extractDescription(content);
+  const got = typeof data.description === 'string' ? data.description : '';
+  if (again2 !== got) badDesc.push(f + ' → 文件里 ' + JSON.stringify(got) + '，重算是 ' + JSON.stringify(again2));
+}
+
+check('每篇的 date 都是 YYYY-MM-DD（看原始字节）', badDate.length === 0, badDate.length ? '\n      ' + badDate.join('\n      ') : '');
+check('每篇的 category 都落在 6 个枚举里', badCat.length === 0, badCat.length ? '\n      ' + badCat.join('\n      ') : '');
+
+// 分布也要验，因为它独立于 `categoryFor` 的实现：只验「落在枚举里」是抓不到映射写反的
+// ——把「OI/游记」错映射成「知识」，枚举照样通过，但篇数分布会从
+// {知识:25, 游记:4, 杂谈:3, 项目:4} 变成 {知识:29, 游记:0, ...}。
+// 下面这组数字是**按目录清点**出来的（24+1 / 4 / 3 / 4），不是照 categoryFor 复算的。
+const EXPECT_CAT = { 知识: 25, 技术: 0, 项目: 4, 书单: 0, 游记: 4, 杂谈: 3 };
+const catDiff = Object.entries(EXPECT_CAT)
+  .filter(([c, n]) => (catCount[c] ?? 0) !== n)
+  .map(([c, n]) => `${c}: 期望 ${n} 篇，实际 ${catCount[c] ?? 0} 篇`);
+check('各分类的篇数分布与目录清点一致', catDiff.length === 0,
+  catDiff.length ? '\n      ' + catDiff.join('\n      ')
+                 : '（' + Object.entries(catCount).map(([c, n]) => c + ':' + n).join(' ') + '）');
+check('没有空 slug（空 slug 写出点文件，Astro 静默不收）', badSlug.length === 0, badSlug.length ? '\n      ' + badSlug.join('\n      ') : '');
+check('每篇的 description 与重算结果一致', badDesc.length === 0, badDesc.length ? '\n      ' + badDesc.join('\n      ') : '');
+
 console.log(bad ? '探针失败：' + bad + ' 条' : '全部通过');
 if (bad) process.exit(1);
 ```
 
-预期：`全部通过`，五条检查的读数是 **36 / 26 / 0 / 0 / 0**（文章总数 / 带标签的篇数 / 正文残留标签行 / 摘要仍是标签串 / 来自白名单之外目录的篇数）。
+预期：`全部通过`。十条检查分两组，读数是：
+
+| 组 | 检查 | 预期读数 |
+|---|---|---|
+| 标签链路 | 文章总数 | 36 |
+| 标签链路 | 带标签的文章数 | 26 |
+| 标签链路 | 正文残留标签行 | 0 |
+| 标签链路 | 摘要仍是标签串 | 0 |
+| 标签链路 | 来自白名单之外目录 | 0 |
+| frontmatter | date 不是 YYYY-MM-DD | 0 |
+| frontmatter | category 越界 | 0 |
+| frontmatter | 分类分布的偏差项 | 0（分布为 知识:25 项目:4 游记:4 杂谈:3） |
+| frontmatter | 空 slug | 0 |
+| frontmatter | description 与重算不一致 | 0 |
+
+**这四条 frontmatter 检查也要自证判别力。** 逐个制造坏法、看到对应的那条变红、再还原——**看不到红就说明这条检查是摆设**。
+
+**下表右列的红集是实测的，不是推演的**：派发前我在一份 36 篇的合成语料上把本探针的代码块**从计划里抽出来**跑过——基线十条全 PASS、退出码 0，六种坏法各自命中下表所列的那几条、退出码 1。两处连带红集比我原先估的多（改坏一篇 category 会同时改到分布；复制出的点文件会计入总数、标签数与分布），都已按实测改正。
+
+| 改哪里 | 应当变红 |
+|---|---|
+| 某篇的 `date:` 改成 `Sun Jul 05 2026 08:00:00 GMT+0800 (中国标准时间)` | 第 6 条 |
+| 某篇的 `category:` 改成 `笔记`（不在枚举里） | 第 7、8 条（改坏一篇同时也改了分布，连带红是对的） |
+| 把 `blog.config.json` 里 `"OI/游记": "游记"` 改成 `"知识"`，重跑 `npm run sync` | 第 8 条（分布）**单独**红，第 7 条（枚举）**不红**——这正是分布检查存在的理由 |
+| 复制一篇**带标签**的成 `src/content/blog/.md` | 第 1、2、8、9 条（点文件被计入总数、标签数与分布，连带红是对的） |
+| 删掉某篇的 `description:` 行（该篇重算非空） | 第 10 条 |
+
+（编号按检查的先后顺序：1 文章总数、2 带标签篇数、3 白名单、4 残留标签行、5 摘要仍是标签串、6 date、7 category 枚举、8 分类分布、9 空 slug、10 description。）
+
+**改完一律还原并重跑一次确认全绿**，别让探针的残留改动进入 Step 10 的提交。
+
+**关于 date，实测前提是**：本轮之前我逐篇量过，36 篇**全部**能拿到 git 首次提交日期（`gitFirstCommitDate` 返回 `2026-07-05`，36 篇同一天——那是库的首次提交日），且 36 篇里没有一篇被 `.gitignore` 匹配。所以 mtime 兜底路径**不可达**，36 篇的 `date:` 应当**全是** `2026-07-05`。看到别的值就是走了兜底，先查为什么，不要接受。
 
 **最后那一条是隐私断言，不是形式主义。** `sourcePath` 就写在每篇生成文件的 frontmatter 里，白拿。它的意义是：**「36 篇」这个数字对，不等于「对的 36 篇」**——白名单拼错、或某个 `publish: true` 加在了不该加的地方（比如 `简历/` 下），数量都可能照样是 36 或者差一点。这条断言把「哪 36 篇」钉死，比人眼过一遍标题可靠。**它红了就是硬故障，停下来查清，不要靠改数字过。**
 
@@ -3280,39 +3384,161 @@ if (bad) process.exit(1);
 
 **5a. 幂等性：第二次运行必须一个字节都不改。**
 
-```bash
-find src/content/blog -name '*.md' | sort | xargs sha256sum > /tmp/probe-before.txt
-npm run sync
-find src/content/blog -name '*.md' | sort | xargs sha256sum > /tmp/probe-after.txt
-diff /tmp/probe-before.txt /tmp/probe-after.txt && echo '幂等：36 个文件逐字节未变'
+写到 `.superpowers/sdd/2026-09-21-personal-blog/probe-idempotent.mjs`（**不要写进仓库**）：
+
+```js
+// 幂等性探针：snapshot 存一份逐篇 sha256，compare 比对。
+//
+// 为什么不用 `find ... | xargs sha256sum`：管道会把退出码变成最后一个命令的，
+// 更要紧的是万一 find 一无所获，两次快照都是**空文件**，diff 会照样「通过」——
+// 那是个假绿灯，而这条验证的全部意义就在于不能是假的。
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import crypto from 'node:crypto';
+
+const ROOT = path.resolve(import.meta.dirname, '..', '..', '..');
+const DIR = path.join(ROOT, 'src', 'content', 'blog');
+const SNAP = path.join(import.meta.dirname, 'probe-idempotent-snapshot.json');
+
+const mode = process.argv[2];
+if (mode !== 'snapshot' && mode !== 'compare') {
+  console.error('用法：node probe-idempotent.mjs snapshot | compare');
+  process.exit(2);
+}
+
+const files = (await fs.readdir(DIR)).filter((f) => f.endsWith('.md')).sort();
+const hashes = {};
+for (const f of files) {
+  hashes[f] = crypto.createHash('sha256').update(await fs.readFile(path.join(DIR, f))).digest('hex');
+}
+
+if (mode === 'snapshot') {
+  // 快照阶段就先卡篇数：空目录也「快照成功」的话，后面比的是一对空清单。
+  if (files.length !== 36) {
+    console.error(`快照时读到 ${files.length} 篇，预期 36 篇——先查清，这次比对没有意义`);
+    process.exit(1);
+  }
+  await fs.writeFile(SNAP, JSON.stringify(hashes, null, 2), 'utf8');
+  console.log('已快照 36 篇的 sha256 → probe-idempotent-snapshot.json');
+  process.exit(0);
+}
+
+const before = JSON.parse(await fs.readFile(SNAP, 'utf8'));
+let bad = 0;
+if (Object.keys(before).length !== files.length) {
+  console.log(`FAIL  篇数变了：快照 ${Object.keys(before).length} 篇 → 现在 ${files.length} 篇`);
+  bad++;
+}
+const changed = files.filter((f) => before[f] !== hashes[f]);
+if (changed.length) {
+  console.log(`FAIL  ${changed.length} 篇的字节变了：\n      ` + changed.join('\n      '));
+  bad++;
+}
+if (!bad) console.log('PASS  36 篇的文件名与内容逐字节未变');
+console.log(bad ? '幂等性探针失败' : '幂等：通过');
+if (bad) process.exit(1);
 ```
 
-预期：打印 `幂等：36 个文件逐字节未变`（`diff` 无输出、退出码 0），且 `npm run sync` 报 `新增 0 / 更新 0`。
+```bash
+node .superpowers/sdd/2026-09-21-personal-blog/probe-idempotent.mjs snapshot
+npm run sync
+node .superpowers/sdd/2026-09-21-personal-blog/probe-idempotent.mjs compare
+```
 
-**这条和 T10 Step 5 的区别就是它存在的理由**：T10 时 `published` 是空集，「新增 0 / 更新 0」**在脚本彻底坏掉时也照样成立**。现在有 36 个真实文件，**只有真的判定了「内容没变就不写」才会是 0**。`sha256sum` 那一层更严——它连「改写了但字节相同」都不放过。
+预期：`已快照 36 篇的 sha256` → `npm run sync` 报 `新增 0 / 更新 0` → `PASS  36 篇的文件名与内容逐字节未变` 与 `幂等：通过`（退出码 0）。
+
+**这条和 T10 Step 5 的区别就是它存在的理由**：T10 时 `published` 是空集，「新增 0 / 更新 0」**在脚本彻底坏掉时也照样成立**。现在有 36 个真实文件，**只有真的判定了「内容没变就不写」才会是 0**。sha256 那一层更严——它连「改写了但字节相同」都不放过。
 
 **5b. 清理路径确实会删，而且只删该删的。**
 
-这一步**故意制造一次「取消发布」**。确定性挑选目标，不靠人眼：
+这一步**故意制造一次「取消发布」**。目标由脚本确定性挑选，不靠人眼，也**不靠手工改 vault**——手工那一步正是本节下面警告的坑（改错成仓库里的副本会被下次同步覆盖回来，让人以为测试通过了）。
 
-```bash
-SLUG=$(ls -1 src/content/blog/*.md | sort | head -1 | xargs -n1 basename | sed 's/\.md$//')
-SRC=$(grep -m1 '^sourcePath:' "src/content/blog/$SLUG.md" | sed 's/^sourcePath: *"//; s/"$//')
-echo "目标 slug: $SLUG"
-echo "vault 源文件: $SRC"
+写到 `.superpowers/sdd/2026-09-21-personal-blog/probe-unpublish.mjs`（**不要写进仓库**）：
+
+```js
+// 清理路径探针。全项目唯一一处破坏性操作，用它把「取消发布」做得确定、可回滚、可断言。
+// 它只碰 vault 里那一个源文件的 publish 那一行，且只改 true↔false。
+import fs from 'node:fs/promises';
+import path from 'node:path';
+
+const ROOT = path.resolve(import.meta.dirname, '..', '..', '..');
+const DIR = path.join(ROOT, 'src', 'content', 'blog');
+const STATE = path.join(import.meta.dirname, 'probe-unpublish-target.json');
+const vault = JSON.parse(await fs.readFile(path.join(ROOT, 'blog.config.json'), 'utf8')).vaultPath;
+
+const mode = process.argv[2];
+let bad = 0;
+const say = (ok, msg) => { if (!ok) bad++; console.log((ok ? 'PASS  ' : 'FAIL  ') + msg); };
+const listMd = async () => (await fs.readdir(DIR)).filter((x) => x.endsWith('.md')).sort();
+
+if (mode === 'off') {
+  const files = await listMd();
+  const file = files[0]; // 排序后第一篇——确定性，不用人眼挑
+  if (!file) throw new Error('src/content/blog 里没有 .md');
+  const m = (await fs.readFile(path.join(DIR, file), 'utf8')).match(/^sourcePath: (.*)$/m);
+  if (!m) throw new Error(file + ' 的 frontmatter 里没有 sourcePath 行');
+  const rel = JSON.parse(m[1].trim()); // 带引号的 JSON 字符串，解析比剥引号可靠
+  const abs = path.join(vault, rel);
+  const src = await fs.readFile(abs, 'utf8');
+  // 先确认此刻确实是 true 再改：状态不对就停，别在不明状态上做破坏性操作。
+  if (!/^publish: true$/m.test(src)) throw new Error(abs + ' 里没有 `publish: true`，先查清状态');
+  await fs.writeFile(abs, src.replace(/^publish: true$/m, 'publish: false'), 'utf8');
+  await fs.writeFile(STATE, JSON.stringify({ file, rel, abs }), 'utf8');
+  console.log('已把 vault 里的源文件改成 publish: false');
+  console.log('  生成文件: ' + file);
+  console.log('  vault 源: ' + rel);
+} else if (mode === 'on') {
+  const st = JSON.parse(await fs.readFile(STATE, 'utf8'));
+  const src = await fs.readFile(st.abs, 'utf8');
+  await fs.writeFile(st.abs, src.replace(/^publish: false$/m, 'publish: true'), 'utf8');
+  console.log('已还原 publish: true → ' + st.rel);
+} else if (mode === 'check') {
+  const st = JSON.parse(await fs.readFile(STATE, 'utf8'));
+  const files = await listMd();
+  say(files.length === 35, `剩余文章数 === 35（读到 ${files.length}）`);
+  say(!files.includes(st.file), `${st.file} 的副本已被移除`);
+
+  // 源文件必须**还在**。同步只删仓库里的副本，绝不动 vault——这条红了就是真事故。
+  const still = await fs.stat(st.abs).then(() => true, () => false);
+  say(still, 'vault 里的源文件仍在（同步只删副本，不动源）');
+
+  // 删除清单必须逐条可解释：明细里**恰好一行**，且就是刚取消发布的那一篇。
+  // 这条防的是「某个 publishDir 被改名/消失、别的目录仍产出候选」那种不对称删除——
+  // 那时删除会照常发生、报告只写「已删除: N 篇」，没有任何一处提示你丢了一整个目录。
+  const log = await fs.readFile(process.argv[3], 'utf8');
+  const detail = log.split('\n').filter((l) => /^ {4}- /.test(l));
+  say(/^ {2}已删除: +1 篇$/m.test(log), '同步报告写的是「已删除: 1 篇」');
+  say(detail.length === 1 && detail[0] === '    - ' + st.file,
+    `删除明细恰好一行且是它（读到 ${detail.length} 行：${JSON.stringify(detail)}）`);
+
+  console.log(bad ? '清理路径探针失败' : '清理路径：通过');
+  if (bad) process.exit(1);
+} else {
+  console.error('用法：node probe-unpublish.mjs off | check <同步日志> | on');
+  process.exit(2);
+}
 ```
 
-**去改 vault 里那个 `$SRC`**，把 `publish: true` 改成 `publish: false`，然后：
+```bash
+node .superpowers/sdd/2026-09-21-personal-blog/probe-unpublish.mjs off
+npm run sync > /tmp/t11-cleanup.txt 2>&1
+cat /tmp/t11-cleanup.txt
+node .superpowers/sdd/2026-09-21-personal-blog/probe-unpublish.mjs check /tmp/t11-cleanup.txt
+```
+
+预期：`off` 打印目标的两行；同步报告 `已删除: 1 篇` 且明细只有一行；`check` 六条全 `PASS`、打印 `清理路径：通过`（退出码 0）。
+
+**然后还原并确认回到 36 篇：**
 
 ```bash
+node .superpowers/sdd/2026-09-21-personal-blog/probe-unpublish.mjs on
 npm run sync
-echo "剩余文章数: $(ls -1 src/content/blog/*.md | wc -l)"        # 应为 35
-test -f "src/content/blog/$SLUG.md" && echo '!! 该篇没被删掉' || echo '清理生效：该篇已移除'
+node .superpowers/sdd/2026-09-21-personal-blog/probe-idempotent.mjs compare
 ```
 
-预期：`已删除: 1 篇`；文章数 **35**；打印 `清理生效：该篇已移除`。
+预期：`已还原 publish: true`；同步报 `新增 1 / 更新 0`；`compare` 打印 `PASS  36 篇的文件名与内容逐字节未变` 与 `幂等：通过`。
 
-**最后把 `$SRC` 改回 `publish: true` 并重跑 `npm run sync`**，确认文章数回到 **36**，且该篇的 `sha256sum` 与 `/tmp/probe-before.txt` 里那一行**逐字符相同**（位置相同、哈希相同）。
+**最后的 `compare` 不是顺手带的**：它要求恢复出来的那一篇与 5a 快照时的**哈希逐字符相同**——即「删掉再重建」得到的必须是原来那个字节，而不是一个内容相近的新文件。
 
 **为什么这条不能省。** 这是全项目**唯一一处破坏性操作**，而且到这一步为止**从没被执行过**：
 
