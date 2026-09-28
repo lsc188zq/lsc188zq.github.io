@@ -3080,7 +3080,11 @@ const problems = [];
 for (const f of files) {
   const raw = await fs.readFile(path.join(DIR, f), 'utf8');
 
-  // 去掉 frontmatter
+  // 去掉 frontmatter。
+  // 行号要按**文件真实行号**报，所以得记住 frontmatter 占了几行——否则报出来的
+  // 位置比实际少一个 frontmatter 的长度（本批差 8 行），拿着行号去 Obsidian 里找会找错地方。
+  const fmMatch = raw.match(/^---\n[\s\S]*?\n---\n/);
+  const fmLines = fmMatch ? fmMatch[0].split('\n').length - 1 : 0;
   const body = raw.replace(/^---\n[\s\S]*?\n---\n/, '');
   const segs = splitSegments(body);
 
@@ -3093,7 +3097,7 @@ for (const f of files) {
     if (seg.type === 'code') continue;
 
     seg.content.split('\n').forEach((line, i) => {
-      const at = startLine + i + 1;
+      const at = fmLines + startLine + i + 1;
       const dollars = (line.match(/(?<!\\)\$/g) ?? []).length;
       if (dollars % 2 !== 0) {
         problems.push(`${f}:${at}  行内 $ 数量为奇数（${dollars} 个）— ${line.trim().slice(0, 60)}`);
@@ -3107,8 +3111,11 @@ for (const f of files) {
     });
   }
 
-  // 检查残留的 Obsidian 专有语法
-  if (/```ad-|^>\s*\[!/.test(body)) {
+  // 检查残留的 Obsidian 专有语法。
+  // **`m` 标志不能省**：没有它 `^` 只匹配整个字符串的开头，而 body 剥掉 frontmatter 后
+  // 首字符是换行（生成文件是 `---\n…\n---\n\n正文`），所以 `^>` 这一支**一次都不可能命中**
+  // ——callout 检查会变成摆设。`^` 那一支必须配 `m`，`` ```ad- `` 那一支不需要。
+  if (/```ad-|^>\s*\[!/m.test(body)) {
     problems.push(`${f}  含 Obsidian callout / admonition 语法，博客不渲染`);
   }
 }
@@ -3526,7 +3533,7 @@ cat /tmp/t11-cleanup.txt
 node .superpowers/sdd/2026-09-21-personal-blog/probe-unpublish.mjs check /tmp/t11-cleanup.txt
 ```
 
-预期：`off` 打印目标的两行；同步报告 `已删除: 1 篇` 且明细只有一行；`check` 六条全 `PASS`、打印 `清理路径：通过`（退出码 0）。
+预期：`off` 打印目标的两行；同步报告 `已删除: 1 篇` 且明细只有一行；`check` **五条**全 `PASS`、打印 `清理路径：通过`（退出码 0）。
 
 **然后还原并确认回到 36 篇：**
 
@@ -3622,7 +3629,11 @@ if (bad) process.exit(1);
 
 预期：全部 PASS。
 
-**这条也要求自证判别力**：把 `src/pages/tags/[tag].astro` 里 filter 的 `p.data.tags.includes(tag) || p.data.category === tag` 改成 `true`，重新 `npm run build` 并重跑本脚本，**必须看到第 2 条与第 3 条变红**（详情页会列出全部 36 篇，而总览页报的仍是各标签的真实篇数）。然后还原、重建、再跑一遍确认全绿。**看不到红就说明这条验证没有判别力，不要以「全绿」收尾。**
+**这条也要求自证判别力**：把 `src/pages/tags/[tag].astro` 里 filter 的 `p.data.tags.includes(tag) || p.data.category === tag` 改成 `true`，重新 `npm run build` 并重跑本脚本，**必须看到那三条「`/tags/<名字> 卡片数 === N`」的详情页断言变红**（详情页会列出全部 36 篇，而总览页报的仍是各标签的真实篇数）。
+
+**下面这几条应当保持绿，别把它们当成失败**：总览页总篇数、标签数 > 0、没有标签含 `/`、以及「存在不覆盖全部文章的标签」——它们只读**总览页**，而变异改的是 `[tag].astro`，总览页不受影响。**这正是「红集要可解释」的意思**：红的三条与绿的四条，各自都能说出为什么。
+
+然后还原、重建、再跑一遍确认全绿。**看不到红就说明这条验证没有判别力，不要以「全绿」收尾。**
 
 - [ ] **Step 9: 截图抽查三篇**
 
