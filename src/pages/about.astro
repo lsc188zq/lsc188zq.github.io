@@ -13,5 +13,8 @@ import '../styles/prose.css';
 </BaseLayout>
 
 <style>
-  .about { max-width: 720px; margin: 0 auto; }
+  /* 只限宽、**不**居中。曾经的 `margin: 0 auto` 让本页内容左边界落在 190px，
+     而 /tags、/404、文章页都是 26px（.shell 的 padding）——从页头点「关于」时
+     内容会明显往里跳一下。宽度用 global.css 的 --maxw 令牌（此前无人使用）。 */
+  .about { max-width: var(--maxw); }
 </style>

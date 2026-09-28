@@ -51,21 +51,33 @@ import '../styles/search.css';
   浏览器一执行就抛 "ReferenceError: __VITE_PRELOAD__ is not defined"，搜索彻底失效。
   已实测：去掉 is:inline 重建后，探针的「页面错误」即为此错误、结果数为 0。
   is:inline 让 Astro 不打包、不转译、原样输出这段脚本，结构上排除了该可能性。
+
+  下面这段脚本里刻意不留 `//` 注释，说明文字一律搬到这里：项目硬约束「自有 JS ≤ 90 行 /
+  3 KB」，首页峰值已经贴在预算线上，而 HTML 注释不计入那条预算。原本写在脚本里的几条：
+  - Pagefind 索引只在用户真正开始搜索时才加载，不影响首屏（所以是动态 import 而非首页预取）。
+  - 构建期 pagefind.js 还不存在——pagefind 是在 astro build **跑完之后**才生成它的。原样留给
+    运行时按站点根路径去取（@vite-ignore 在 is:inline 下已无对象，留着只为万一有人去掉
+    is:inline 时多一层提示）。
+  - import 失败的兜底：面板用既有的 .sr-empty 样式显示「搜索暂时不可用」。没有它时，部署漏了
+    pagefind/ 目录、离线、或该文件被拦成 404，面板会永远 hidden、输入框看起来是死的，用户只
+    在控制台看到一个未处理的 TypeError。本项目对评论区的立场正是「空白会让人以为功能坏了」
+    （见 Comments.astro 的占位说明），搜索框不该落进那个被否掉的模式。
 -->
 <script is:inline>
   const input = document.getElementById('search-input');
   const panel = document.getElementById('search-results');
 
-  // Pagefind 索引只在用户真正开始搜索时才加载，不影响首屏。
   let pagefind = null;
 
   async function ensure() {
     if (!pagefind) {
-      // 构建期这个文件还不存在——pagefind 是在 astro build **跑完之后**才生成它的。
-      // 原样留给运行时按站点根路径去取（@vite-ignore 在 is:inline 下已无对象，
-      // 留着只为万一有人去掉 is:inline 时多一层提示）。
-      pagefind = await import(/* @vite-ignore */ '/pagefind/pagefind.js');
-      await pagefind.options({ excerptLength: 30 });
+      try {
+        pagefind = await import(/* @vite-ignore */ '/pagefind/pagefind.js');
+        await pagefind.options({ excerptLength: 30 });
+      } catch {
+        panel.hidden = false;
+        panel.innerHTML = '<div class="sr-empty">搜索暂时不可用</div>';
+      }
     }
     return pagefind;
   }
@@ -81,6 +93,7 @@ import '../styles/search.css';
         return;
       }
       const pf = await ensure();
+      if (!pf) return;
       const res = await pf.search(q);
       const items = await Promise.all(res.results.slice(0, 8).map((r) => r.data()));
 
