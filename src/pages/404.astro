@@ -1,0 +1,24 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+---
+<BaseLayout title="页面不存在">
+  <div class="nf">
+    <div class="nf-code">404</div>
+    <p class="nf-msg">这里没有东西。</p>
+    <a class="nf-link" href="/">← 回首页</a>
+  </div>
+</BaseLayout>
+
+<style>
+  .nf { text-align: center; padding: 80px 0; }
+  .nf-code {
+    font-family: var(--mono);
+    font-size: 56px;
+    font-weight: 700;
+    color: var(--bd);
+    line-height: 1;
+    margin-bottom: 18px;
+  }
+  .nf-msg { color: var(--mu); font-size: 14px; margin: 0 0 22px; }
+  .nf-link { font-family: var(--mono); font-size: 12.5px; }
+</style>
