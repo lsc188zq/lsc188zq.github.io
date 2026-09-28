@@ -107,10 +107,16 @@ export function normalizeHeadings(md) {
         ? seg.content
             .split('\n')
             .map((line) => {
-              const m = line.match(/^(#{1,6})(\s.*)$/);
+              // 正文来自 vault，多为 CRLF：按 '\n' 切行后每行尾随一个 '\r'。
+              // 匹配前先摘掉它——`.*` 不匹配 '\r'、`$` 又没有 m 标志（只在整串末尾成立），
+              // 带着 '\r' 的行一行都匹配不上，函数会「检测到要平移」却一字不改地静默返回。
+              // 摘下的 '\r' 必须原样拼回：每一行的行尾序列（\r\n / \n）不得被改写。
+              const cr = line.endsWith('\r') ? '\r' : '';
+              const core = cr ? line.slice(0, -1) : line;
+              const m = core.match(/^(#{1,6})(\s.*)$/);
               if (!m) return line;
               const lv = Math.min(6, Math.max(1, m[1].length + shift));
-              return '#'.repeat(lv) + m[2];
+              return '#'.repeat(lv) + m[2] + cr;
             })
             .join('\n')
         : seg.content

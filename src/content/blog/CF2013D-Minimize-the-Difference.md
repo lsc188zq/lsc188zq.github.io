@@ -20,7 +20,7 @@ sourcePath: "OI/算法/贪心/CF2013D Minimize the Difference.md"
 记 $sq$ 为前缀和序列，$sh$为后缀和序列。  
 事实上最后答案求的正是：
 $$ \overset{n}{\max_{i=1}}\lceil sh_{n-i+1}/i \rceil - \overset{n}{\min_{i=1}}\lfloor sq_i/i \rfloor $$
-### Code:
+## Code:
 ```cpp
 #include<bits/stdc++.h>
 using namespace std;
