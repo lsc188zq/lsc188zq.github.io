@@ -15,7 +15,9 @@ for (const f of files) {
 
   // 去掉 frontmatter。
   // 行号要按**文件真实行号**报，所以得记住 frontmatter 占了几行——否则报出来的
-  // 位置比实际少一个 frontmatter 的长度（本批差 8 行），拿着行号去 Obsidian 里找会找错地方。
+  // 位置比实际少一个 frontmatter 的长度（本批 31 篇差 8 行；另 5 篇没有 description、
+  // frontmatter 少一行，差 7 行——所以这里必须**按篇现量**，写死一个数就会错），
+  // 拿着行号去 Obsidian 里找会找错地方。
   const fmMatch = raw.match(/^---\n[\s\S]*?\n---\n/);
   const fmLines = fmMatch ? fmMatch[0].split('\n').length - 1 : 0;
   const body = raw.replace(/^---\n[\s\S]*?\n---\n/, '');
