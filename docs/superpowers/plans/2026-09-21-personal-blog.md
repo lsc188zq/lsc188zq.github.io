@@ -2342,6 +2342,34 @@ test('normalizeHeadings 的平移量按整篇算，不按代码块切开的段�
   const md = ['### 题目描述', '', '```cpp', 'int x;', '```', '', '#### 细节'].join('\n');
   const out = normalizeHeadings(md);
   assert.equal(out, ['## 题目描述', '', '```cpp', 'int x;', '```', '', '### 细节'].join('\n'));
+
+test('normalizeHeadings 在 CRLF 输入下也平移标题，且不改动任何一行的行尾序列', () => {
+  // 夹具与期望都用 join('\r\n') 构造：vault 来的正文是 CRLF，按 '\n' 切行后
+  // 每行尾随一个 '\r'，旧实现在这里静默返回输入（检测命中、重写一行不中）。
+  // 期望值不许手写 \n，否则这条测试会退化成永远绿的装饰。
+  const md = ['# 一', '## 二', '### 三'].join('\r\n') + '\r\n';
+  assert.equal(
+    normalizeHeadings(md),
+    ['## 一', '### 二', '#### 三'].join('\r\n') + '\r\n'
+  );
+
+  // 换行保持：每行原来的行尾序列（\r\n / \n）不得改变——
+  // 把 CRLF 文件悄悄改成混用是另一个同类缺陷。混用夹具，两条断言各管一事：
+  // 一条忽略行尾差异看内容（内容错才红），一条只看行尾（行尾被归一才红）。
+  const mixed = '# 一\r\n## 二\n### 三\r\n';
+  const out = normalizeHeadings(mixed);
+  assert.equal(out.replace(/\r\n/g, '\n'), '## 一\n### 二\n#### 三\n');
+  const inLines = mixed.split('\n');
+  const outLines = out.split('\n');
+  assert.equal(outLines.length, inLines.length, '行数不应改变');
+  for (let i = 0; i < inLines.length; i++) {
+    assert.equal(
+      outLines[i].endsWith('\r'),
+      inLines[i].endsWith('\r'),
+      `第 ${i + 1} 行的行尾序列被改变了`
+    );
+  }
+});
 });
 ```
 
@@ -2382,10 +2410,16 @@ export function normalizeHeadings(md) {
         ? seg.content
             .split('\n')
             .map((line) => {
-              const m = line.match(/^(#{1,6})(\s.*)$/);
+              // 正文来自 vault，多为 CRLF：按 '\n' 切行后每行尾随一个 '\r'。
+              // 匹配前先摘掉它——`.*` 不匹配 '\r'、`$` 又没有 m 标志（只在整串末尾成立），
+              // 带着 '\r' 的行一行都匹配不上，函数会「检测到要平移」却一字不改地静默返回。
+              // 摘下的 '\r' 必须原样拼回：每一行的行尾序列（\r\n / \n）不得被改写。
+              const cr = line.endsWith('\r') ? '\r' : '';
+              const core = cr ? line.slice(0, -1) : line;
+              const m = core.match(/^(#{1,6})(\s.*)$/);
               if (!m) return line;
               const lv = Math.min(6, Math.max(1, m[1].length + shift));
-              return '#'.repeat(lv) + m[2];
+              return '#'.repeat(lv) + m[2] + cr;
             })
             .join('\n')
         : seg.content
