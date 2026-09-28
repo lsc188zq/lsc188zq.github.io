@@ -1,0 +1,67 @@
+---
+// giscus 配置。两个 ID 需要用户从 https://giscus.app 获取后填入。
+const REPO = 'lsc188zq/lsc188zq.github.io';
+const REPO_ID = 'REPLACE_WITH_REPO_ID';
+const CATEGORY_ID = 'REPLACE_WITH_CATEGORY_ID';
+
+const configured = !REPO_ID.startsWith('REPLACE') && !CATEGORY_ID.startsWith('REPLACE');
+---
+{
+  configured ? (
+    <section class="comments">
+      <div class="comments-title">评论</div>
+      <script
+        is:inline
+        src="https://giscus.app/client.js"
+        data-repo={REPO}
+        data-repo-id={REPO_ID}
+        data-category="Announcements"
+        data-category-id={CATEGORY_ID}
+        data-mapping="pathname"
+        data-strict="1"
+        data-reactions-enabled="1"
+        data-emit-metadata="0"
+        data-input-position="top"
+        data-theme="preferred_color_scheme"
+        data-lang="zh-CN"
+        data-loading="lazy"
+        crossorigin="anonymous"
+        async
+      />
+    </section>
+  ) : (
+    <section class="comments-placeholder">
+      评论区尚未配置。参见设计文档第 10.3 节，在 https://giscus.app 获取
+      <code>data-repo-id</code> 与 <code>data-category-id</code> 后填入
+      <code>src/components/Comments.astro</code>。
+    </section>
+  )
+}
+
+<style>
+  .comments { margin-top: 34px; padding-top: 20px; border-top: 1px solid var(--bd); }
+  .comments-title {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: .12em;
+    color: var(--fa);
+    text-transform: uppercase;
+    margin-bottom: 14px;
+  }
+  .comments-placeholder {
+    margin-top: 34px;
+    padding: 20px;
+    border: 1px dashed var(--bd);
+    border-radius: 9px;
+    color: var(--fa);
+    font-size: 12.5px;
+    line-height: 1.8;
+  }
+  .comments-placeholder code {
+    font-family: var(--mono);
+    background: var(--chip);
+    border: 1px solid var(--bd);
+    border-radius: 4px;
+    padding: 1px 5px;
+  }
+</style>

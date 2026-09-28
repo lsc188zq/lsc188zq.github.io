@@ -1,0 +1,100 @@
+<div class="search" id="search">
+  <input
+    id="search-input"
+    class="search-input"
+    type="search"
+    placeholder="搜索文章…"
+    autocomplete="off"
+  />
+  <div class="search-results" id="search-results" hidden></div>
+</div>
+
+<style>
+  .search { position: relative; margin-bottom: 20px; }
+  .search-input {
+    width: 100%;
+    font-family: var(--sans);
+    font-size: 14px;
+    color: var(--tx);
+    background: var(--card);
+    border: 1px solid var(--bd);
+    border-radius: 8px;
+    padding: 9px 13px;
+  }
+  .search-input:focus { outline: none; border-color: var(--ac); }
+  .search-results {
+    position: absolute;
+    z-index: 20;
+    left: 0;
+    right: 0;
+    top: calc(100% + 6px);
+    background: var(--card);
+    border: 1px solid var(--bd);
+    border-radius: 8px;
+    max-height: 380px;
+    overflow-y: auto;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, .28);
+  }
+  .sr-item { display: block; padding: 11px 14px; border-bottom: 1px solid var(--bd); }
+  .sr-item:last-child { border-bottom: 0; }
+  .sr-item:hover { background: var(--chip); text-decoration: none; }
+  .sr-title { font-size: 13.5px; font-weight: 600; color: var(--tx); margin-bottom: 4px; }
+  .sr-excerpt { font-size: 12px; line-height: 1.65; color: var(--mu); }
+  .sr-excerpt mark { background: transparent; color: var(--ac); font-weight: 600; }
+  .sr-empty { padding: 14px; font-size: 12.5px; color: var(--fa); }
+</style>
+
+<!--
+  is:inline 不是可选优化，是这段脚本能跑起来的必要条件。
+  没有它时，构建期的 Vite 会把下面的 import() 改写成
+      __vitePreload(() => import(`/pagefind/pagefind.js`), __VITE_PRELOAD__)
+  一个包装进 Vite 的 "preload 占位符"。该占位符本该在 importAnalysisBuild 的
+  renderChunk 里被替换成依赖数组或 void 0，但本项目的构建路径下没有作用到这段脚本
+  （1.4KB < 内联阈值，Astro 直接把它内联进了 index.html），于是裸标识符留在了产物里，
+  浏览器一执行就抛 "ReferenceError: __VITE_PRELOAD__ is not defined"，搜索彻底失效。
+  已实测：去掉 is:inline 重建后，探针的「页面错误」即为此错误、结果数为 0。
+  is:inline 让 Astro 不打包、不转译、原样输出这段脚本，结构上排除了该可能性。
+-->
+<script is:inline>
+  const input = document.getElementById('search-input');
+  const panel = document.getElementById('search-results');
+
+  // Pagefind 索引只在用户真正开始搜索时才加载，不影响首屏。
+  let pagefind = null;
+
+  async function ensure() {
+    if (!pagefind) {
+      // 构建期这个文件还不存在——pagefind 是在 astro build **跑完之后**才生成它的。
+      // 原样留给运行时按站点根路径去取（@vite-ignore 在 is:inline 下已无对象，
+      // 留着只为万一有人去掉 is:inline 时多一层提示）。
+      pagefind = await import(/* @vite-ignore */ '/pagefind/pagefind.js');
+      await pagefind.options({ excerptLength: 30 });
+    }
+    return pagefind;
+  }
+
+  let timer = null;
+
+  input?.addEventListener('input', () => {
+    clearTimeout(timer);
+    const q = input.value.trim();
+    timer = setTimeout(async () => {
+      if (q.length < 2) {
+        panel.hidden = true;
+        return;
+      }
+      const pf = await ensure();
+      const res = await pf.search(q);
+      const items = await Promise.all(res.results.slice(0, 8).map((r) => r.data()));
+
+      panel.innerHTML = items.length
+        ? items.map((d) => `<a class="sr-item" href="${d.url}"><div class="sr-title">${d.meta.title ?? d.url}</div><div class="sr-excerpt">${d.excerpt}</div></a>`).join('')
+        : '<div class="sr-empty">没有找到匹配的文章</div>';
+      panel.hidden = false;
+    }, 180);
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('#search')) panel.hidden = true;
+  });
+</script>

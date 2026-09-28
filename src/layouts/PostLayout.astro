@@ -3,6 +3,7 @@ import katexCss from 'katex/dist/katex.min.css?url';
 import BaseLayout from './BaseLayout.astro';
 import TableOfContents from '../components/TableOfContents.astro';
 import CodeEnhance from '../components/CodeEnhance.astro';
+import Comments from '../components/Comments.astro';
 import '../styles/prose.css';
 
 interface Props {
@@ -41,7 +42,7 @@ const hasMath = /\$[^$\n]+\$|\$\$[\s\S]+?\$\$/.test(bodyNoCode);
 <BaseLayout title={post.data.title} description={post.data.description}>
   {hasMath && <link rel="stylesheet" href={katexCss} />}
   <div class="post-grid">
-    <article>
+    <article data-pagefind-body>
       <a class="back" href="/">← 返回文章列表</a>
       <h1 class="title">{post.data.title}</h1>
       <div class="meta">
@@ -64,6 +65,7 @@ const hasMath = /\$[^$\n]+\$|\$\$[\s\S]+?\$\$/.test(bodyNoCode);
     </article>
     <TableOfContents headings={headings} />
   </div>
+  <Comments />
   <CodeEnhance />
 </BaseLayout>
 
