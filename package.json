@@ -10,7 +10,7 @@
     "check": "astro check",
     "sync": "node scripts/sync-vault.mjs",
     "check:math": "node scripts/check-math.mjs",
-    "test": "node --test test/"
+    "test": "node --test"
   },
   "dependencies": {
     "@astrojs/markdown-remark": "^7.3.1",

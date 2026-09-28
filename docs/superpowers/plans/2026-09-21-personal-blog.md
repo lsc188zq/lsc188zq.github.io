@@ -116,7 +116,7 @@
     "check": "astro check",
     "sync": "node scripts/sync-vault.mjs",
     "check:math": "node scripts/check-math.mjs",
-    "test": "node --test test/"
+    "test": "node --test"
   },
   "dependencies": {
     "astro": "^7.3.3",
@@ -1273,14 +1273,16 @@ const toc = headings.filter((h) => h.depth === 2 || h.depth === 3);
 <script>
   const links = Array.from(document.querySelectorAll('.toc-link'));
 
-  // 缓存每个标题的**文档绝对位置**。getBoundingClientRect().top + scrollY 与当前
-  // 滚动位置无关，所以只需在加载和 resize 时各算一次——scroll 回调里就不读布局了。
+  // 标题位置与最大滚动量只在 measure() 里读一次并缓存：scroll 回调里再读
+  // scrollHeight 会强制同步布局，而滚动回调每帧都会跑。
   let tops = [];
+  let maxScroll = 0;
   const measure = () => {
     tops = links.map((l) => {
       const el = document.getElementById(l.dataset.target);
       return el ? el.getBoundingClientRect().top + scrollY : Infinity;
     });
+    maxScroll = document.documentElement.scrollHeight - innerHeight;
   };
 
   const LINE = 0.3; // 参考线取视口高度的 30%
@@ -1291,7 +1293,6 @@ const toc = headings.filter((h) => h.depth === 2 || h.depth === 3);
     // 只写 scrollY + innerHeight >= scrollHeight - 2 的话，当文章总高不超过视口时
     // 它**恒为真**——读者明明在一篇短随笔的顶部，目录却点亮最后一节，
     // 与他实际所在的位置不符。这和上面那条"末尾够不到参考线"是同一类缺陷，只是方向相反。
-    const maxScroll = document.documentElement.scrollHeight - innerHeight;
     const atBottom = maxScroll > 0 && scrollY >= maxScroll - 2;
     // 滚到底时，末尾几节的标题因为**无处可滚**，永远到不了参考线——没有这一条，
     // 目录里最后几节永远高亮不了，点它们的链接也毫无反应。
@@ -1307,6 +1308,12 @@ const toc = headings.filter((h) => h.depth === 2 || h.depth === 3);
   sync();
   addEventListener('scroll', sync, { passive: true });
   addEventListener('resize', () => { measure(); sync(); });
+  // 稳定之后布局仍会位移（图片加载、按需注入的 KaTeX 样式表都会把标题往下推），
+  // 所以盯盒子而不是枚举原因（枚举必然漏掉下一种）：html 与 body 都观察，谁变触发谁。
+  // resize 监听保留——视口高度改变的是参考线位置，不一定改变盒子尺寸，观察器抓不到。
+  const ro = new ResizeObserver(() => { measure(); sync(); });
+  ro.observe(document.documentElement);
+  ro.observe(document.body);
 </script>
 ```
 
@@ -1601,6 +1608,7 @@ git commit -m "feat: 文章页目录、阅读时长、上下篇与公式样式"
 在 `src/styles/prose.css` 末尾追加：
 
 ```css
+
 /* ---------- 代码块 ---------- */
 
 .prose pre {
@@ -2158,10 +2166,14 @@ test('mapText 只改正文不动代码', () => {
 - [ ] **Step 2: 运行测试确认失败**
 
 ```bash
-node --test test/
+node --test
 ```
 
 预期：FAIL，报 `Cannot find module '../scripts/lib/transform.mjs'`。
+
+> **命令不要带目录参数。** 本机实测（Node v22.13.0，Windows）：`node --test test/` 会把 `test/` 当成入口文件加载，报 `Cannot find module '<仓库>/test'`、退出码 1——**换一个全新空目录同样复现**，所以不是本仓库的问题。裸 `node --test` 才会按 Node 默认规则发现 `test/*.test.mjs`。**上面这条预期报文只在新命令下成立**：新命令下删掉 `transform.mjs`，报的正好是 import 那一层的错——`ERR_MODULE_NOT_FOUND: Cannot find module '…/scripts/lib/transform.mjs'`（退出码 1）；而**旧命令在更早的地方就报「找不到目录」，压根走不到 import 那一层**。
+>
+> `package.json` 的 `"test"` 脚本自脚手架起就写作 `node --test test/`，**一直是坏的**，已一并改成 `node --test`。T9 后续的 4 条测试命令同理，都不带目录参数。**判别力实测过**：裸形式在注入一条必失败用例后退出码变 1；CI 在 Linux 上未实测，但裸形式两边都对。
 
 - [ ] **Step 3: 实现段落切分**
 
@@ -2181,8 +2193,12 @@ export function splitSegments(md) {
   let buf = [];
   let inFence = false;
   let fenceChar = '';
+  let fenceLen = 0;
 
   const fenceMatch = (line) => line.match(/^\s*(`{3,}|~{3,})/);
+  // 闭合围栏：整行只有围栏、允许首尾空白，不能带 info string。
+  // 与开启围栏分开判定——'```js' 这种整行不是纯围栏，不构成闭合。
+  const fenceClose = (line) => line.match(/^\s*(`{3,}|~{3,})\s*$/);
 
   for (const line of lines) {
     const m = fenceMatch(line);
@@ -2194,14 +2210,18 @@ export function splitSegments(md) {
       }
       inFence = true;
       fenceChar = m[1][0];
+      fenceLen = m[1].length;
       buf.push(line);
       continue;
     }
 
     if (inFence) {
       buf.push(line);
-      // 闭合围栏必须与开启围栏同种字符
-      if (m && m[1][0] === fenceChar) {
+      const c = fenceClose(line);
+      // 闭合围栏必须：与开启围栏同种字符，且不短于开启围栏（CommonMark）。
+      // 少这两条里的任意一条，围栏内的内容就会被提前切成正文段，
+      // 随之被 normalizeMath 之类的改写静默破坏——改坏了代码，却不报错。
+      if (c && c[1][0] === fenceChar && c[1].length >= fenceLen) {
         segs.push({ type: 'code', content: buf.join('\n') });
         buf = [];
         inFence = false;
@@ -2229,7 +2249,7 @@ export function mapText(md, fn) {
 - [ ] **Step 4: 运行测试确认通过**
 
 ```bash
-node --test test/
+node --test
 ```
 
 预期：4 个测试全部 PASS。
@@ -2282,7 +2302,7 @@ export function normalizeMath(md) {
 - [ ] **Step 7: 运行测试**
 
 ```bash
-node --test test/
+node --test
 ```
 
 预期：8 个测试全部 PASS。
@@ -2322,6 +2342,34 @@ test('normalizeHeadings 的平移量按整篇算，不按代码块切开的段�
   const md = ['### 题目描述', '', '```cpp', 'int x;', '```', '', '#### 细节'].join('\n');
   const out = normalizeHeadings(md);
   assert.equal(out, ['## 题目描述', '', '```cpp', 'int x;', '```', '', '### 细节'].join('\n'));
+
+test('normalizeHeadings 在 CRLF 输入下也平移标题，且不改动任何一行的行尾序列', () => {
+  // 夹具与期望都用 join('\r\n') 构造：vault 来的正文是 CRLF，按 '\n' 切行后
+  // 每行尾随一个 '\r'，旧实现在这里静默返回输入（检测命中、重写一行不中）。
+  // 期望值不许手写 \n，否则这条测试会退化成永远绿的装饰。
+  const md = ['# 一', '## 二', '### 三'].join('\r\n') + '\r\n';
+  assert.equal(
+    normalizeHeadings(md),
+    ['## 一', '### 二', '#### 三'].join('\r\n') + '\r\n'
+  );
+
+  // 换行保持：每行原来的行尾序列（\r\n / \n）不得改变——
+  // 把 CRLF 文件悄悄改成混用是另一个同类缺陷。混用夹具，两条断言各管一事：
+  // 一条忽略行尾差异看内容（内容错才红），一条只看行尾（行尾被归一才红）。
+  const mixed = '# 一\r\n## 二\n### 三\r\n';
+  const out = normalizeHeadings(mixed);
+  assert.equal(out.replace(/\r\n/g, '\n'), '## 一\n### 二\n#### 三\n');
+  const inLines = mixed.split('\n');
+  const outLines = out.split('\n');
+  assert.equal(outLines.length, inLines.length, '行数不应改变');
+  for (let i = 0; i < inLines.length; i++) {
+    assert.equal(
+      outLines[i].endsWith('\r'),
+      inLines[i].endsWith('\r'),
+      `第 ${i + 1} 行的行尾序列被改变了`
+    );
+  }
+});
 });
 ```
 
@@ -2362,10 +2410,16 @@ export function normalizeHeadings(md) {
         ? seg.content
             .split('\n')
             .map((line) => {
-              const m = line.match(/^(#{1,6})(\s.*)$/);
+              // 正文来自 vault，多为 CRLF：按 '\n' 切行后每行尾随一个 '\r'。
+              // 匹配前先摘掉它——`.*` 不匹配 '\r'、`$` 又没有 m 标志（只在整串末尾成立），
+              // 带着 '\r' 的行一行都匹配不上，函数会「检测到要平移」却一字不改地静默返回。
+              // 摘下的 '\r' 必须原样拼回：每一行的行尾序列（\r\n / \n）不得被改写。
+              const cr = line.endsWith('\r') ? '\r' : '';
+              const core = cr ? line.slice(0, -1) : line;
+              const m = core.match(/^(#{1,6})(\s.*)$/);
               if (!m) return line;
               const lv = Math.min(6, Math.max(1, m[1].length + shift));
-              return '#'.repeat(lv) + m[2];
+              return '#'.repeat(lv) + m[2] + cr;
             })
             .join('\n')
         : seg.content
@@ -2381,7 +2435,7 @@ export function normalizeHeadings(md) {
 - [ ] **Step 10: 运行测试**
 
 ```bash
-node --test test/
+node --test
 ```
 
 预期：14 个测试全部 PASS。
@@ -2424,8 +2478,13 @@ test('extractDescription 超长时截断加省略号', () => {
   assert.ok(out.endsWith('…'));
 });
 
-test('extractDescription 找不到合格段落时返回空串', () => {
-  assert.equal(extractDescription('```cpp\nint x;\n```'), '');
+test('extractDescription 跳过代码段，找不到合格行时返回空串', () => {
+  // 负路径：代码行本身足够长（14 字），所以它落空只能是「跳过代码段」造成的，
+  // 不是被 < 10 的字数门槛滤掉的。原用例用的是 'int x;'（6 字），
+  // 删掉 if (seg.type !== 'text') continue; 也照样通过——那是假防护。
+  assert.equal(extractDescription('```cpp\nint x = 12345;\n```'), '');
+  // 正对照：同一行内容去掉围栏后必须被选中，证明上面的空串不是门槛造成的
+  assert.equal(extractDescription('int x = 12345;'), 'int x = 12345;');
 });
 
 test('端到端：真实笔记形状的输入', () => {
@@ -2456,7 +2515,11 @@ test('端到端：真实笔记形状的输入', () => {
 });
 ```
 
-最后一个用例是本任务最有价值的测试：它同时检验了公式归一、标题平移、**代码块跳过**三件事的相互作用，而这正是同步脚本最容易出错的地方。`#define` 和代码注释里的 `\(` 如果被改写，说明 `mapText` 的分段逻辑有漏洞。
+最后一个用例守的是**公式归一 × 代码块跳过**的相互作用：`#define` 和代码注释里的 `\(` 如果被改写，说明 `mapText` 的分段逻辑有漏洞——这一层它确实守得住。
+
+**但它守不住标题平移。** 它的两个标题都是 H3、深度相同，而「按整篇算 min」与「逐段各算 min」在这种输入上结果完全一致，所以把错的那版实现注进去，**它照样通过**。守住标题平移的是 Step 8 那条「平移量按整篇算，不按代码块切开的段落各算各的」——T9 实现者实测：注入错版后**只有它变红**。
+
+> 这段措辞原写作「最后一个用例是本任务最有价值的测试：它同时检验了公式归一、标题平移、代码块跳过三件事」。**那句话不成立**，是 T9 施工时实测出来的（端到端用例在错版实现下依然全绿）。记在这里，免得后来者以为它兼守三件事。
 
 - [ ] **Step 12: 实现 slug 与摘要**
 
@@ -2519,21 +2582,163 @@ export function extractDescription(md, max = 80) {
 }
 ```
 
-- [ ] **Step 13: 运行全部测试**
+- [ ] **Step 13: 写标签行剥离的失败测试**
 
-```bash
-node --test test/
+改 `test/transform.test.mjs` 两处。第一处：把 `splitLeadingTags` 加进顶部那个 import 列表（放在 `extractDescription,` 之后）：
+
+```js
+  extractDescription,
+  splitLeadingTags,
+} from '../scripts/lib/transform.mjs';
 ```
 
-预期：23 个测试全部 PASS。
+第二处：在文件末尾追加：
+
+```js
+// ---- T9 Part 2：splitLeadingTags（Obsidian 标签行剥离）----
+// 夹具是手写字符串，不是任何真实笔记的正文（真笔记可能含真实姓名，且会把测试与 vault 内容耦合）。
+// T8 的 CRLF 与 T9 的开头空行是这两条的承重点，别把它们「顺手」改掉。
+
+test('splitLeadingTags 剥离首行标签，正文从下一行原样开始', () => {
+  const md = '#DP #单调队列\n## 题目描述\n\n正文';
+  const r = splitLeadingTags(md);
+  assert.deepEqual(r.tags, ['DP', '单调队列']);
+  assert.equal(r.body, '## 题目描述\n\n正文');
+});
+
+test('splitLeadingTags 不把 Markdown 标题行当成标签', () => {
+  const md = '## 题目描述\n\n正文';
+  const r = splitLeadingTags(md);
+  assert.deepEqual(r.tags, []);
+  assert.equal(r.body, md);
+});
+
+test('splitLeadingTags 不把 #include 代码行当成标签', () => {
+  const md = '#include <iostream>\nint main(){}';
+  const r = splitLeadingTags(md);
+  assert.deepEqual(r.tags, []);
+  assert.equal(r.body, md);
+});
+
+test('splitLeadingTags 的标签名不带尾随空格', () => {
+  const r = splitLeadingTags('#树形DP \n正文');
+  assert.deepEqual(r.tags, ['树形DP']);
+  assert.equal(r.body, '正文');
+});
+
+test('splitLeadingTags 对同名标签去重', () => {
+  const r = splitLeadingTags('#DP #DP #DP\n正文');
+  assert.deepEqual(r.tags, ['DP']);
+  assert.equal(r.body, '正文');
+});
+
+test('splitLeadingTags 连续多行标签一并剥离，按出现顺序编号', () => {
+  const r = splitLeadingTags('#A #B\n#C\n正文');
+  assert.deepEqual(r.tags, ['A', 'B', 'C']);
+  assert.equal(r.body, '正文');
+});
+
+test('splitLeadingTags 保留标签行之前的开头空行', () => {
+  const r = splitLeadingTags('\n\n#A\n正文');
+  assert.deepEqual(r.tags, ['A']);
+  assert.equal(r.body, '\n\n正文');
+});
+
+test('splitLeadingTags 保留 CRLF 换行不被改写', () => {
+  const r = splitLeadingTags('#A\r\n\r\n正文\r\n');
+  assert.deepEqual(r.tags, ['A']);
+  assert.equal(r.body, '\r\n正文\r\n');
+});
+
+test('splitLeadingTags 无标签行时 body 与入参逐字节相同', () => {
+  // 开头那个空行是这条的承重点：早返回若写成 body: md.trim()，只有这条会红。
+  const md = '\n## 单调队列\n\n正文一段。\n\n```cpp\n#include <iostream>\nint main(){}\n```\n';
+  const r = splitLeadingTags(md);
+  assert.deepEqual(r.tags, []);
+  assert.equal(r.body, md);
+});
+```
+
+- [ ] **Step 14: 运行测试确认失败**
+
+```bash
+node --test
+```
+
+预期：**退出码 1，报 `SyntaxError: The requested module '../scripts/lib/transform.mjs' does not provide an export named 'splitLeadingTags'`，读数是 `# tests 1 / # pass 0 / # fail 1`。**
+
+> **这个形状要认准，它是实测的**：失败不是「9 条新用例红了」，而是**整个测试文件在加载期就抛了**，Node 把它算成**一个**失败单元——ESM 的命名导入在模块求值之前就校验，`transform.mjs` 里没有这个导出时，一条用例都跑不起来。看到 `tests 1 / fail 1` 就是对的。
+>
+> 与上面 Step 2 的形态不同：那时 `transform.mjs` **整个文件都不存在**，报 `Cannot find module`；这里是文件在、**只缺这一个导出**。
+
+- [ ] **Step 15: 实现标签行剥离**
+
+在 `scripts/lib/transform.mjs` 末尾追加（**逐字照抄，含注释**）：
+
+```js
+/**
+ * 剥离正文开头的 Obsidian 标签行（如 `#DP #单调队列`），返回标签数组与剩余正文。
+ *
+ * 判据：整行 trim 后按空白切分，**每个 token 都形如 `#` + 非空白非 `#` 的字符**才算标签行。
+ * 于是两种「以 # 开头但不是标签」的行不会被误吃：
+ *   - `## 题目描述`：切出来第二个 token 是 `题目描述`，不以 `#` 开头；
+ *   - `#include <iostream>`：第二个 token 是 `<iostream>`，不以 `#` 开头。
+ *
+ * 连续多行标签行一并吃掉；标签按出现顺序**去重**——同一篇里出现两次同名标签，
+ * 会让标签云显示的篇数与标签详情页列出的篇数对不上。
+ *
+ * **没有标签行时 body 与入参逐字节相同**，同步脚本靠这条保证幂等（第二次运行必须
+ * 产出同样内容，否则每次都会判定「有更新」而重写全部文件）。
+ * 注意 split('\n') 会把 CRLF 的 `\r` 留在各行末尾、join('\n') 又原样拼回，
+ * 所以换行符不被改动——**不要**改成 split(/\r?\n/)。
+ */
+export function splitLeadingTags(md) {
+  const lines = md.split('\n');
+  let i = 0;
+  while (i < lines.length && lines[i].trim() === '') i++;
+
+  const tags = [];
+  const seen = new Set();
+  let j = i;
+  while (j < lines.length) {
+    const tokens = lines[j].trim().split(/\s+/).filter(Boolean);
+    if (tokens.length === 0 || !tokens.every((t) => /^#[^\s#]/.test(t))) break;
+    for (const t of tokens) {
+      const name = t.slice(1);
+      if (!seen.has(name)) { seen.add(name); tags.push(name); }
+    }
+    j++;
+  }
+
+  if (j === i) return { tags: [], body: md };
+  return { tags, body: lines.slice(0, i).concat(lines.slice(j)).join('\n') };
+}
+```
+
+> **那段注释是承重的，别删**：它写了为什么**不能**把 `split('\n')` 改成 `split(/\r?\n/)`——改了之后 CRLF 的 `\r` 会被吃掉，函数就不再满足「没有标签行时 body 与入参逐字节相同」，而同步脚本的幂等判定正靠这一条（第二次运行必须产出同样内容，否则每次都会判定「有更新」而重写全部文件）。控制器实测过：那种改法只有「保留 CRLF 换行不被改写」这一条用例会红。
+
+- [ ] **Step 16: 运行全部测试**
+
+```bash
+node --test
+```
+
+预期：40 个测试全部 PASS。
 
 > **这套测试的验证状况（如实记录）**：计划编写阶段把**原始**实现跑通过一遍（22 个用例）。**但那个实现里 `normalizeHeadings` 是错的**——它经由 `mapText` 逐段落计算平移量，代码块把文档切开后每段各算各的 `shift`，相对层级会被抹平（详见 Step 9 的注释）。
 >
-> 控制器已把它改成「先切段、按整篇统算 min、再回填」，并新增第 14 个用例专门守这个缺陷。**新实现已在全部 23 个用例上重跑通过，且新用例在旧实现上确认失败（两个方向都实测过）**。上面那个 `extractDescription` 的实现与其它函数均未改动。
+> 控制器已把它改成「先切段、按整篇统算 min、再回填」，并新增第 14 个用例专门守这个缺陷。**新实现已在全部用例上重跑通过，且新用例在旧实现上确认失败（两个方向都实测过）**。
 >
-> 因此若你执行时看到失败，**大概率是实现被改动过，而不是测试本身有问题**。
+> **40 这个数字的来路，别照抄计划里别处的旧数字**：计划编写时是 23 条；Part 1 落地时评审轮次又补了 8 条 → 31 条；标签行再补 9 条 → **40 条**。**那 8 条不在计划里**——它们是评审阶段发现的可判别边界，属于计划的已知缺口，这里如实记一笔，不假装计划本来就列全了。
+>
+> **因此若你执行时看到失败，大概率是实现被改动过，而不是测试本身有问题。**
 
-- [ ] **Step 14: 提交**
+> **别为「每条用例都要有唯一坏法」硬凑坏法——这个目标做不到，也不该做。** 控制器用 11 种注入在隔离副本上实测过（其中「删掉早返回」一种经实测是**等价重构**，不是坏法：`slice(0,i).concat(slice(j))` 在 `i===j` 时拼回的就是原数组，删不删它测试都全绿）。10 种真坏法里，7 种各有唯一捕获者，另 3 种是多条用例共同捕获（最容易红的是把标签名写成带 `#` 的那种，一次红 6 条）。
+>
+> **有 3 条用例不是任何坏法的唯一捕获者**：「剥离首行标签」「不把 Markdown 标题行当成标签」「标签名不带尾随空格」。注意它们**都能被某条坏法打红**，不是恒真断言（恒真断言才是必须修的缺陷）；它们的作用是把边界钉在用例里。**控制器专门为「尾随空格」造过一种坏法（同时去掉 `trim()` 与 `filter(Boolean)`），实测它红的是「尾随空格」和「保留 CRLF 换行不被改写」两条**——尾随空格与 CRLF 的 `\r` 在正则 `\s` 面前是同一件事，凑不出唯一。所以看到某条用例没有专属坏法时，**不要让实现者去改测试凑覆盖**。
+
+
+- [ ] **Step 17: 提交**
 
 ```bash
 git add -A
@@ -2649,7 +2854,7 @@ export async function fileMtimeDate(fullPath) {
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import matter from 'gray-matter';
-import { normalizeMath, normalizeHeadings, makeSlug, extractDescription } from './lib/transform.mjs';
+import { normalizeMath, normalizeHeadings, makeSlug, extractDescription, splitLeadingTags } from './lib/transform.mjs';
 import { listMarkdown, gitFirstCommitDate, fileMtimeDate } from './lib/vault.mjs';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
@@ -2714,7 +2919,11 @@ for (const rel of candidates) {
     continue;
   }
 
-  const body = normalizeHeadings(normalizeMath(parsed.content));
+  // 标签行在正规化之前剥掉。今天的两个正规化函数都不会碰这一行
+  // （normalizeMath 只改 \( \) 与 \[ \]；normalizeHeadings 要求 `#` 后有空格才当标题），
+  // 所以先后顺序今天不影响结果——先剥是为了让「正文」进入这两个函数时已经是干净的正文。
+  const { tags: vaultTags, body: rawBody } = splitLeadingTags(parsed.content);
+  const body = normalizeHeadings(normalizeMath(rawBody));
 
   const filename = path.basename(rel);
   const title = parsed.data.title ?? filename.replace(/\.md$/i, '');
@@ -2731,7 +2940,7 @@ for (const rel of candidates) {
       title,
       date,
       category: parsed.data.category ?? categoryFor(rel),
-      tags: parsed.data.tags ?? [],
+      tags: parsed.data.tags ?? vaultTags,
       description: parsed.data.description ?? extractDescription(body),
       sourcePath: rel,
       slug: parsed.data.slug,
@@ -2838,6 +3047,9 @@ ls -1 src/content/blog/
 
 预期：输出「已标记发布: 0 篇」，随后列出所有未标记的文件；且**两次 `ls` 的输出逐字节相同**，其中包含 `_sample.md`。
 
+**但这一步看不到标签剥离的接线。** `splitLeadingTags` 的调用点在 `publish !== true` 的 `continue` **之后**，而此刻 36 篇一篇都没标记，`published` 是空集——那行代码**一次都不会执行**。它的**单元用例**在 T9（9 条，含 CRLF 保留与「`#include` 不被误吃」两条边界），但「`sync-vault.mjs` 真的调用了它」这件事**在本任务里无法验证**，这是一条如实记录的盲区，不是遗漏。
+**已列为 T11 的必查项**：T11 给 36 篇加上标记之后，要确认 ① 生成的 26 篇里 `tags:` 非空、② 没有一篇的正文以标签行开头、③ 原先那 8 篇的摘要不再是标签串。
+
 
 **这个「临界状态」还有第二条到达路径，而且更危险。** `vaultPath` 写错时 `listMarkdown` 是**静默跳过**的（`vault.mjs` 里 `catch { return; }`），`candidates` 同样是空数组、`wanted` 同样空——但这一次目录里躺着的是**已经生成好的全部文章**，清理循环会把它们一次删光。所以 Step 3 的清理循环里加了一道守卫：**`candidates.length === 0` 时整段清理跳过，并打印 `[已跳过清理]`**。两条守卫各挡一个场景，**不能互相替代**：
 
@@ -2880,11 +3092,32 @@ git commit -m "feat: 同步脚本 CLI 与配置文件"
 ---
 
 ## Task 11: 首次迁移 36 篇
+> **2026-09-28 用户裁决（T11 完成之后）：两篇近空笔记下架。**
+> `项目/游戏/三眼枪/版本日志.md`（原文 0 字节）与 `OI/游记/OI回忆录.md`（只有一行标题）
+> 在 vault 里的 `publish: true` 改回 `false`，重跑同步后从站点移除。
+> 同日用户另裁决：`游戏玩法.md` 正文里的真名**保持原样**，不做任何改动。
+>
+> **2026-09-28 用户再裁决（T11 完成之后）：游记 3 篇 + 文集 3 篇，全部不发。**
+> 用户原话「我的游记和文集全都不要上传」。`OI/游记/` 与 `文集/` 下 6 篇在 vault 里的
+> `publish` 一律改回 `false`，重跑同步后从站点移除。
+> **白名单 `publishDirs` 不动**——用户在两条路里选的是「保留白名单、逐篇关闭」这条：
+> 日后想单独放行某一篇，把那一篇改回 `publish: true` 再跑同步即可。代价是白名单还开着，
+> 日后新建的带 `publish: true` 的游记/文集仍会被同步进来；用户已知情并选择。
+>
+> **所以：本任务完成时的读数是 36 篇 → 下架两篇后 34 篇 → 再下架 6 篇后 28 篇。**
+> 下面 Step 4 探针的 **文章总数**、**带标签的篇数**、**分类分布**三个读数随之更新（各带一行说明）；
+> 其余「36」是**迁移当时**的记叙，不改——改了就是把历史写成没发生过。
+>
+> **「带标签 26 篇」也要改，因为它确实变了。** 下架的 8 篇里**有 3 篇是带标签的**
+> （`CSP-S 2024 游记.md`、`NOIP 2024游记.md`、`安老师的恩情还不完.md`，各 1 个），
+> 26 − 3 = **23**。这个数有两条独立对账：现存 28 篇里 5 篇的 `tags` 是空数组
+> （28 − 5 = 23），且把本段探针原样跑一遍读到 23、另 9 条全绿。
+> **别把它当探针坏了而去改探针**——改的是计划里的期望值，探针本身没错。
 
 **Files:**
 - Create: `scripts/check-math.mjs`
 - Delete: `src/content/blog/_sample.md`
-- Modify: Obsidian vault 中 36 个文件的 frontmatter（加 `publish: true`）
+- Create: Obsidian vault 中 36 个文件**新建** frontmatter（实测 0/36 已有，见 Step 2）
 
 **Interfaces:**
 - Consumes: Task 10 的 `npm run sync`
@@ -2902,17 +3135,49 @@ import { splitSegments } from './lib/transform.mjs';
 const ROOT = path.resolve(import.meta.dirname, '..');
 const DIR = path.join(ROOT, 'src', 'content', 'blog');
 
-const files = (await fs.readdir(DIR).catch(() => []))
-  .filter((f) => f.endsWith('.md') && !f.startsWith('_'));
+// 目录读不到时**必须报错退出**：原来 `readdir(DIR).catch(() => [])` 把「目录不存在」
+// 静默吞成空数组，再打印「通过：0 篇」——检查根本没跑，输出却是一片绿。
+let names;
+try {
+  names = await fs.readdir(DIR);
+} catch (e) {
+  const why = e.code === 'ENOENT' ? '目录不存在' : `目录读不了（${e.code}）`;
+  console.error(`公式检查无法运行：${why} — ${DIR}`);
+  console.error('同步脚本没跑过？先 npm run sync 再检查。');
+  process.exit(2);
+}
+
+const files = names.filter((f) => f.endsWith('.md') && !f.startsWith('_'));
+
+// 空目录同理：一篇都没检查，就不许说「通过」。派生目录为空说明同步没跑或跑坏了。
+if (files.length === 0) {
+  console.error(`公式检查无法运行：目录里没有可检查的 .md 文件（0 篇）— ${DIR}`);
+  console.error('空目录意味着同步没跑或跑坏了，此时的「通过」是假的——先 npm run sync。');
+  process.exit(2);
+}
+
+// 退出码约定：0 = 通过；1 = 跑成了、发现了问题；2 = 根本没跑成（环境问题）。
 
 const problems = [];
 
 for (const f of files) {
   const raw = await fs.readFile(path.join(DIR, f), 'utf8');
 
-  // 去掉 frontmatter
-  const body = raw.replace(/^---\n[\s\S]*?\n---\n/, '');
+  // 去掉 frontmatter。
+  // 行号要按**文件真实行号**报，所以得记住 frontmatter 占了几行——否则报出来的
+  // 位置比实际少一个 frontmatter 的长度（本批 25 篇差 8 行；另 3 篇没有 description、
+  // frontmatter 少一行，差 7 行——所以这里必须**按篇现量**，写死一个数就会错），
+  // 拿着行号去 Obsidian 里找会找错地方。
+  // body 从同一份 fmMatch 上 slice，frontmatter 正则不再写第二遍——两处各写一遍时，
+  // 哪天只改一处，行号基准就会换个形式复发。
+  const fmMatch = raw.match(/^---\n[\s\S]*?\n---\n/);
+  const fmLines = fmMatch ? fmMatch[0].split('\n').length - 1 : 0;
+  const body = fmMatch ? raw.slice(fmMatch[0].length) : raw;
   const segs = splitSegments(body);
+
+  // 逐行检查的结果先攒着，和 `$$` 的结论合并去重后统一按行号顺序输出。
+  const fileProbs = [];
+  const dd = []; // 正文段里未被转义的 `$$` 出现（{ at, text }）
 
   let lineNo = 0;
   for (const seg of segs) {
@@ -2923,24 +3188,55 @@ for (const f of files) {
     if (seg.type === 'code') continue;
 
     seg.content.split('\n').forEach((line, i) => {
-      const at = startLine + i + 1;
+      const at = fmLines + startLine + i + 1;
+      const text = line.trim().slice(0, 60);
       const dollars = (line.match(/(?<!\\)\$/g) ?? []).length;
       if (dollars % 2 !== 0) {
-        problems.push(`${f}:${at}  行内 $ 数量为奇数（${dollars} 个）— ${line.trim().slice(0, 60)}`);
+        fileProbs.push({ at, kind: 'dollar', msg: `${f}:${at}  行内 $ 数量为奇数（${dollars} 个）— ${text}` });
       }
       if (/\\\(/.test(line) && !/\\\)/.test(line)) {
-        problems.push(`${f}:${at}  \\( 未闭合 — ${line.trim().slice(0, 60)}`);
+        fileProbs.push({ at, kind: 'paren', msg: `${f}:${at}  \\( 未闭合 — ${text}` });
       }
       if (/\\\[/.test(line) && !/\\\]/.test(line)) {
-        problems.push(`${f}:${at}  \\[ 未闭合 — ${line.trim().slice(0, 60)}`);
+        fileProbs.push({ at, kind: 'bracket', msg: `${f}:${at}  \\[ 未闭合 — ${text}` });
       }
+      // 块级定界符要单独数：逐行 `$` 奇偶对 `$$` 是盲的（2 个 = 偶数），一行 `$$`
+      // 的未闭合它永远报不出来。只数正文段——代码段在上面已经 continue 了。
+      const ddN = (line.match(/(?<!\\)\$\$/g) ?? []).length;
+      for (let k = 0; k < ddN; k++) dd.push({ at, text });
     });
   }
 
-  // 检查残留的 Obsidian 专有语法
-  if (/```ad-|^>\s*\[!/.test(body)) {
-    problems.push(`${f}  含 Obsidian callout / admonition 语法，博客不渲染`);
+  // 未被转义的 `$$` 总数为奇数 = 有未闭合的块级公式。贪心配对下（第 1、2 个配成一对），
+  // 落单的总是最后一个，报它的行；只出现 1 个时，它自己就是那个未闭合的开定界符。
+  if (dd.length % 2 !== 0) {
+    const last = dd[dd.length - 1];
+    // 同一行不要报两条：`$$$x`（`$$` + `$`，共 3 个 `$`）会被两条检查同时命中。
+    // 选定的优先级：**报 `$$` 未闭合、压掉同一行那条 `$` 奇偶**——它更精确，点明了
+    // 落单的是块定界符；同一行报两条是同一根因数了两遍。只压 kind: 'dollar'，
+    // `\(` / `\[` 是别的缺陷，不受影响。
+    for (let k = fileProbs.length - 1; k >= 0; k--) {
+      if (fileProbs[k].kind === 'dollar' && fileProbs[k].at === last.at) fileProbs.splice(k, 1);
+    }
+    fileProbs.push({ at: last.at, kind: 'dd', msg: `${f}:${last.at}  $$ 未闭合 — ${last.text}` });
   }
+
+  // 残留的 Obsidian 专有语法：逐行扫、报**第一处命中**的行号。
+  // 逐行判定时每行各自是单行字符串，`^` 天然匹配行首——上一轮「整段扫 + 缺 m 标志 →
+  // `^>` 那支一次都命不中」的形态从结构上不再可能；而整段 `test` 只知道「有」，
+  // 报不出行号（规格 5.4 要求 `xxx.md:42` 这种定点格式）。
+  // 扫描范围与原实现一致（整个 body，不限正文段）：` ```ad- ` 与 `> [!` 都算。
+  const bodyLines = body.split('\n');
+  for (let j = 0; j < bodyLines.length; j++) {
+    if (/^\s*>\s*\[!/.test(bodyLines[j]) || /```ad-/.test(bodyLines[j])) {
+      const at = fmLines + j + 1;
+      fileProbs.push({ at, kind: 'callout', msg: `${f}:${at}  含 Obsidian callout / admonition 语法，博客不渲染` });
+      break;
+    }
+  }
+
+  fileProbs.sort((a, b) => a.at - b.at);
+  problems.push(...fileProbs.map((p) => p.msg));
 }
 
 if (problems.length === 0) {
@@ -2956,27 +3252,90 @@ process.exit(1);
 
 - [ ] **Step 2: 在 vault 里标记要发布的文件**
 
-在 Obsidian 中打开下列路径下的 36 个文件，在**文件最开头**加入 frontmatter：
+**实测前提（逐字节扫过 36 篇）：它们一篇都没有 YAML frontmatter**——0/36 以 `---` 开头，0/36 带 BOM。它们的标签写在**正文第一行**（26/36 篇，形如 `#DP #单调队列`）。所以这一步是**新建** frontmatter，不存在「往已有的块里加」的情况。
 
-```yaml
----
-publish: true
----
-```
+**动手前又当场量了一遍**（这五条都不是沿用旧读数，是本次派发前现测的）：
 
-对应目录与数量：
+| 量什么 | 读数 | 为什么要量 |
+|---|---|---|
+| vault 是不是 git 仓库、工作树干不干净 | 干净，**0 处未提交改动** | 回滚路径 `git checkout -- .` 才有意义。你自己没提交的编辑会被一起抹掉 |
+| 36 篇能被 git 认到首次提交日期吗 | **36 / 36**，全是 `2026-07-05` | 拿不到就会掉进 mtime 兜底，日期语义完全不同 |
+| 有文件被 `.gitignore` 匹配吗 | **0** | 被忽略的文件 git 视而不见，但 `listMarkdown` 照样收得到——它会没有 git 历史 |
+| `makeSlug` 产出空串的 | **0** | 空 slug 会写出点文件 `.md`，Astro 静默不收 |
+| 36 个 slug 有撞车吗 | **0**（36 个去重后仍是 36 个） | 撞车会让后写的**静默覆盖**先写的，等于凭空丢一篇 |
 
-| 目录 | 篇数 |
+**关于行尾**：vault 的文件是 **CRLF**（实测）。插入的 frontmatter 用 LF，于是文件内混排——**已实测这无害**：`gray-matter` 读得到 `publish: true`，`^publish: true$` 这类锚点能匹配（JS 的 `$` 把 `\r` 认作行终止符），且「改成 false 再改回 true」与原文**逐字节相同**。所以 5b 的还原不会留下行尾的痕迹。
+
+要标的 5 处在白名单 `publishDirs` 里，共 36 篇：
+
+| 白名单条目 | 篇数 |
 |---|---|
 | `OI/算法/` 及其子目录 | 24 |
 | `OI/游记/` | 4 |
 | `文集/` | 3 |
 | `项目/游戏/三眼枪/` | 4 |
-| `学习/深度学习.md` | 1 |
+| `学习/深度学习/`（目录；里面的文件是 `张量以及张量操作.md`） | 1 |
 
 **明确不标记的目录**：`OI/资料`、`OI/出题`、`OI/每日总结`、`任务/`、`docs/`、`日志/`、`简历/`、`回答.md`、`学习/光纤传感`。这些不在 `publishDirs` 白名单里，即使误加 `publish: true` 也不会被同步——**这是白名单和标记双重把关的意义**。
 
-> 若某个文件已有 frontmatter，把 `publish: true` 加进去即可，不要新开一个 `---` 块。
+**不要手点 36 次。** 手工编辑的出错方式**全是静默的**，下面四条**实测**（不是推测）：
+
+| 你写的 | gray-matter 读到的 | 后果 |
+|---|---|---|
+| `publish: "true"`（带引号） | 字符串 `"true"` | 脚本用的是**严格相等** `parsed.data.publish !== true`（本计划 2725 行），该篇**被静默跳过**，你会以为是自己漏标了 |
+| `publish: yes` / `publish: 是` | 字符串 | 同上 |
+| `publish: True` / `publish: TRUE` | 布尔 `true` | 正常 |
+| `tags: #DP #树形DP` | `null`——YAML 里 `#` 是**注释起点** | **标签全丢，且不报错**：正文里没有了，`?? vaultTags` 也接不住 |
+
+最后一条尤其要说清：**不要把正文第一行的标签搬进 frontmatter**。让它留在正文里，由 `splitLeadingTags` 采集（设计文档第 7 项）。frontmatter 里只写 `publish: true` 这一行。
+
+用下面这个脚本（写到 `.superpowers/sdd/2026-09-21-personal-blog/mark-publish.mjs`，**不要写进仓库**）：
+
+```js
+// 一次性工具：给 vault 里 publishDirs 白名单下的笔记插入 publish: true。
+// 复用 scripts/lib/vault.mjs 的 listMarkdown，保证「本脚本标记的文件集」与
+// 「同步脚本会看的文件集」不可能漂移。
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { listMarkdown } from '../../../scripts/lib/vault.mjs';
+
+const cfg = JSON.parse(await fs.readFile('blog.config.json', 'utf8'));
+const VAULT = cfg.vaultPath;
+const git = (args) => execFileSync('git', ['-C', VAULT, ...args], { encoding: 'utf8' });
+
+// 前置①：vault 工作区必须干净。否则回滚时 git checkout 会连你自己的编辑一起抹掉。
+const dirty = git(['status', '--porcelain']).trim();
+if (dirty) { console.error('vault 有未提交的改动，先处理掉：\n' + dirty); process.exit(1); }
+
+const targets = [];
+for (const dir of cfg.publishDirs) targets.push(...(await listMarkdown(VAULT, dir)));
+console.log('白名单下共 ' + targets.length + ' 个 .md');
+if (targets.length !== 36) { console.error('预期 36 篇，读到 ' + targets.length + ' 篇——先查清再动手'); process.exit(1); }
+
+// 前置②：全部读通、全部算好，再开始写。写到一半失败会留下半成品。
+const rows = [];
+const already = [];
+for (const rel of targets) {
+  const abs = path.join(VAULT, rel);
+  const raw = await fs.readFile(abs, 'utf8');
+  if (raw.charCodeAt(0) === 0xfeff) { console.error(rel + ' 带 BOM，本脚本不处理'); process.exit(1); }
+  if (raw.startsWith('---')) { already.push(rel); continue; }
+  rows.push({ abs, next: '---\npublish: true\n---\n' + raw });
+}
+// 有已存在的 frontmatter 就停下：在最前面再插一个 --- 块会造出**两个**块，
+// gray-matter 只认第一个，第二个会变成正文里的可见垃圾。
+if (already.length) { console.error('这 ' + already.length + ' 篇已有 frontmatter，停手：\n' + already.join('\n')); process.exit(1); }
+
+for (const r of rows) await fs.writeFile(r.abs, r.next, 'utf8');
+console.log('已标记 ' + rows.length + ' 篇');
+console.log('vault 侧改动：' + git(['diff', '--shortstat']).trim());
+console.log('回滚：git -C "' + VAULT + '" checkout -- .');
+```
+
+**三条前置检查都不是装饰**，它们分别挡住「回滚会误伤你自己的未提交编辑」「文件集漂移（不是 36 篇）」「造出两个 frontmatter 块」。**脚本报错时不要绕过它去改数字**——先查清为什么。
+
+`publish: true` 同时是你**以后的控制开关**：想撤下某篇，把它改成 `publish: false`（或删掉这一行），下次 `npm run sync` 就会把站点上的副本删掉。这条路径在 Step 5b 会被**故意执行一次**来做真验证。
 
 - [ ] **Step 3: 删除样例文章**
 
@@ -2992,7 +3351,167 @@ npm run sync
 
 预期：`已标记发布: 36 篇 (新增 36 / 更新 0)`。
 
-若数量不符，看输出的「未标记 publish: true 而跳过」清单，找出漏标的文件。
+**数量不符时先分清是哪一种**——两种成因的表现完全不同，修法也完全不同：
+
+- 「未标记 publish: true 而跳过」清单里**有**它 → 标记没生效。去查它的 frontmatter 是不是写成了 `publish: "true"`（带引号）或 `publish: yes`：**实测这两种会被静默跳过**（Step 2 的表）。
+- 两个清单里**都没有**它 → 它根本不在 `publishDirs` 白名单里。`listMarkdown` 把 `fs.readdir` 的异常**静默吞掉了**（`catch { return; }`），所以白名单路径拼错时**不报错，只是少几篇**，而且这个文件不会出现在任何清单里让你去查。核 `blog.config.json` 的路径拼写。
+
+**再验证标签整条链路真的通了。** 这是 T10 留下的一条**如实记录的盲区**：那时 `published` 是空集，`splitLeadingTags` 的调用点在 `continue` 之后、一次都不会执行，所以「同步脚本真的调用了它」在 T10 期间**无法验证**——只能在这里验。
+
+写到 `.superpowers/sdd/2026-09-21-personal-blog/probe-tags-e2e.mjs`（**不要写进仓库**）：
+
+```js
+// 验证标签从 vault 正文首行 → frontmatter.tags → 正文里不再出现，这条链路真的通了。
+import fs from 'node:fs/promises';
+import matter from 'gray-matter';
+import { splitLeadingTags, extractDescription } from '../../../scripts/lib/transform.mjs';
+
+const DIR = 'src/content/blog';
+const files = (await fs.readdir(DIR)).filter((f) => f.endsWith('.md'));
+let bad = 0;
+const check = (name, ok, extra) => { if (!ok) bad++; console.log((ok ? 'PASS  ' : 'FAIL  ') + name + (extra || '')); };
+
+// 36 → 34 → 28：2026-09-28 两条裁决先后下架 2 篇和 6 篇（见本节段首说明）。
+// 不要再把数字改回去——那 8 篇是真被移除了，不是探针破了。
+check('文章总数 === 28', files.length === 28, '（读到 ' + files.length + '）');
+
+// 每篇的 sourcePath 必须落在这 5 个白名单条目下。写成「等于它、或它后面跟一个 /」，
+// 避免 `文集备份/` 这种名字被 `startsWith('文集')` 误判为合规。
+const WHITELIST = ['OI/算法', 'OI/游记', '文集', '项目/游戏/三眼枪', '学习/深度学习'];
+let withTags = 0;
+const stray = [];
+const leftovers = [];
+const tagDesc = [];
+for (const f of files) {
+  const { data, content } = matter(await fs.readFile(DIR + '/' + f, 'utf8'));
+  const tags = Array.isArray(data.tags) ? data.tags : [];
+  if (tags.length) withTags++;
+  const sp = typeof data.sourcePath === 'string' ? data.sourcePath : '';
+  if (!WHITELIST.some((d) => sp === d || sp.startsWith(d + '/'))) stray.push(f + ' → ' + JSON.stringify(sp));
+  // 把同步脚本用过的**同一个函数**再跑一遍生成后的正文：还有东西可剥，就说明当时没剥。
+  // 这比自己写正则判断强——判据只有一份，不会跟实现漂移。
+  const again = splitLeadingTags(content).tags;
+  if (again.length) leftovers.push(f + ' → ' + JSON.stringify(again));
+  if (typeof data.description === 'string' && /^(#[^\s#]+\s*)+$/.test(data.description.trim())) tagDesc.push(f);
+}
+
+// 36 → 34 → 28：下架的 8 篇里有 3 篇带标签，所以这个数**跟着变了**（26 → 23），
+// 不是探针破了。别改回 26。
+check('带标签的文章数 === 23', withTags === 23, '（读到 ' + withTags + '）');
+check('没有一篇来自白名单之外的目录', stray.length === 0, stray.length ? '\n      ' + stray.join('\n      ') : '');
+check('没有一篇正文还留着标签行', leftovers.length === 0, leftovers.length ? '\n      ' + leftovers.join('\n      ') : '');
+check('没有一篇的摘要还是标签串', tagDesc.length === 0, tagDesc.length ? '\n      ' + tagDesc.join('\n      ') : '');
+
+// —— 第二组：生成出来的 frontmatter 本身 ——
+//
+// 这一组补的是 T10 留下的一条**比我原先说的更宽**的盲区。T10 时 published 是空集，
+// 没有被执行的不止标签那一行：`categoryFor`、`buildFrontmatter`、slug 计算、日期链
+// **一次都没跑过**。所以「36 篇都在」只能证明搬运算术对，不能证明每篇的字段对。
+//
+// 假定：vault 的 frontmatter 里没有 category / date / description（T11 只写 publish: true）。
+// 若你以后手工往 vault 里加了这些字段，本组可能变红——那是**探针按预期工作**（脚本会把
+// `parsed.data.date` 原样写出去，而 YAML 里的日期在 JS 里是 Date 对象），改探针前先看清是哪种。
+const CATEGORIES = ['知识', '技术', '项目', '书单', '游记', '杂谈'];
+const badDate = [];
+const badCat = [];
+const badSlug = [];
+const badDesc = [];
+const catCount = {};
+for (const f of files) {
+  const raw = await fs.readFile(DIR + '/' + f, 'utf8');
+
+  // date 必须看**原始字节**，不能看解析结果：YAML 把 `2026-07-05` 读成时间戳，
+  // gray-matter 交回来的是 Date 对象，从对象上看不出写进去的是不是 YYYY-MM-DD。
+  // 这条防的是回退路径把机器相关的字符串写进**公开仓库**：
+  //   date: Sun Jul 05 2026 08:00:00 GMT+0800 (中国标准时间)
+  // 那样的字节随机器与时区变，同一份 vault 在两台机器上会同步出不同的文件。
+  const m = raw.match(/^date: (.*)$/m);
+  if (!m || !/^\d{4}-\d{2}-\d{2}$/.test(m[1].trim())) {
+    badDate.push(f + ' → ' + (m ? JSON.stringify(m[1]) : '(没有 date 行)'));
+  }
+
+  const { data, content } = matter(raw);
+  if (!CATEGORIES.includes(data.category)) badCat.push(f + ' → ' + JSON.stringify(data.category));
+  catCount[data.category] = (catCount[data.category] ?? 0) + 1;
+
+  // 空 slug 会写出点文件 `.md`。Astro 的 glob 不收集点文件，那篇**静默不出现**——
+  // 没有任何报错，只是站点上少一篇。
+  if (f === '.md' || f.slice(0, -3).trim() === '') badSlug.push(f);
+
+  // description 用**同一个函数**对生成后的正文再算一遍，两边必须逐字符一致。
+  // 「算出来是空串」是合法的（schema 里 description 是 optional），不一致才是故障——
+  // 那意味着脚本当时是对**另一份正文**算的（比如没剥标签的那份、或剥标签前的原文）。
+  const again2 = extractDescription(content);
+  const got = typeof data.description === 'string' ? data.description : '';
+  if (again2 !== got) badDesc.push(f + ' → 文件里 ' + JSON.stringify(got) + '，重算是 ' + JSON.stringify(again2));
+}
+
+check('每篇的 date 都是 YYYY-MM-DD（看原始字节）', badDate.length === 0, badDate.length ? '\n      ' + badDate.join('\n      ') : '');
+check('每篇的 category 都落在 6 个枚举里', badCat.length === 0, badCat.length ? '\n      ' + badCat.join('\n      ') : '');
+
+// 分布也要验，因为它独立于 `categoryFor` 的实现：只验「落在枚举里」是抓不到映射写反的
+// ——把「项目/游戏/三眼枪」错映射成「知识」，枚举照样通过，但篇数分布会从
+// {知识:25, 项目:3} 变成 {知识:28, 项目:0}。
+//
+// ⚠️ 这个坏法**不能再挑 `OI/游记`**：两次下架之后它已发布 0 篇，把它的映射改坏是个
+// **空操作**——分布一个数都不动，这条检查会变成永远绿的假验证。要挑一个**还有文章**的目录。
+//
+// 下面这组数字是**按目录清点**出来的（OI/算法 24 + 学习/深度学习 1 = 25、项目 3），
+// 不是照 categoryFor 复算的。两次下架后 游记 与 杂谈 各剩 0 篇。
+const EXPECT_CAT = { 知识: 25, 技术: 0, 项目: 3, 书单: 0, 游记: 0, 杂谈: 0 };
+const catDiff = Object.entries(EXPECT_CAT)
+  .filter(([c, n]) => (catCount[c] ?? 0) !== n)
+  .map(([c, n]) => `${c}: 期望 ${n} 篇，实际 ${catCount[c] ?? 0} 篇`);
+check('各分类的篇数分布与目录清点一致', catDiff.length === 0,
+  catDiff.length ? '\n      ' + catDiff.join('\n      ')
+                 : '（' + Object.entries(catCount).map(([c, n]) => c + ':' + n).join(' ') + '）');
+check('没有空 slug（空 slug 写出点文件，Astro 静默不收）', badSlug.length === 0, badSlug.length ? '\n      ' + badSlug.join('\n      ') : '');
+check('每篇的 description 与重算结果一致', badDesc.length === 0, badDesc.length ? '\n      ' + badDesc.join('\n      ') : '');
+
+console.log(bad ? '探针失败：' + bad + ' 条' : '全部通过');
+if (bad) process.exit(1);
+```
+
+预期：`全部通过`。十条检查分两组，读数是：
+
+| 组 | 检查 | 预期读数 |
+|---|---|---|
+| 标签链路 | 文章总数 | 28 |
+| 标签链路 | 带标签的文章数 | 23 |
+| 标签链路 | 正文残留标签行 | 0 |
+| 标签链路 | 摘要仍是标签串 | 0 |
+| 标签链路 | 来自白名单之外目录 | 0 |
+| frontmatter | date 不是 YYYY-MM-DD | 0 |
+| frontmatter | category 越界 | 0 |
+| frontmatter | 分类分布的偏差项 | 0（分布为 知识:25 项目:3） |
+| frontmatter | 空 slug | 0 |
+| frontmatter | description 与重算不一致 | 0 |
+
+**这四条 frontmatter 检查也要自证判别力。** 逐个制造坏法、看到对应的那条变红、再还原——**看不到红就说明这条检查是摆设**。
+
+**下表右列的红集是实测的，不是推演的**：派发前我在一份 36 篇的合成语料上把本探针的代码块**从计划里抽出来**跑过——基线十条全 PASS、退出码 0，六种坏法各自命中下表所列的那几条、退出码 1。两处连带红集比我原先估的多（改坏一篇 category 会同时改到分布；复制出的点文件会计入总数、标签数与分布），都已按实测改正。
+
+| 改哪里 | 应当变红 |
+|---|---|
+| 某篇的 `date:` 改成 `Sun Jul 05 2026 08:00:00 GMT+0800 (中国标准时间)` | 第 6 条 |
+| 某篇的 `category:` 改成 `笔记`（不在枚举里） | 第 7、8 条（改坏一篇同时也改了分布，连带红是对的） |
+| 把 `blog.config.json` 里 `"项目/游戏/三眼枪": "项目"` 改成 `"知识"`，重跑 `npm run sync` | 第 8 条（分布）**单独**红，第 7 条（枚举）**不红**——这正是分布检查存在的理由。**别挑 `OI/游记`**：它已发布 0 篇，改它的映射是空操作，这条会变成永远绿的假验证 |
+| 复制一篇**带标签**的成 `src/content/blog/.md` | 第 1、2、8、9 条（点文件被计入总数、标签数与分布，连带红是对的） |
+| 删掉某篇的 `description:` 行（该篇重算非空） | 第 10 条 |
+
+（编号按检查的先后顺序：1 文章总数、2 带标签篇数、3 白名单、4 残留标签行、5 摘要仍是标签串、6 date、7 category 枚举、8 分类分布、9 空 slug、10 description。）
+
+**改完一律还原并重跑一次确认全绿**，别让探针的残留改动进入 Step 10 的提交。
+
+**关于 date，实测前提是**：本轮之前我逐篇量过，36 篇**全部**能拿到 git 首次提交日期（`gitFirstCommitDate` 返回 `2026-07-05`，36 篇同一天——那是库的首次提交日），且 36 篇里没有一篇被 `.gitignore` 匹配。所以 mtime 兜底路径**不可达**，36 篇的 `date:` 应当**全是** `2026-07-05`。看到别的值就是走了兜底，先查为什么，不要接受。
+
+**最后那一条是隐私断言，不是形式主义。** `sourcePath` 就写在每篇生成文件的 frontmatter 里，白拿。它的意义是：**「36 篇」这个数字对，不等于「对的 36 篇」**——白名单拼错、或某个 `publish: true` 加在了不该加的地方（比如 `简历/` 下），数量都可能照样是 36 或者差一点。这条断言把「哪 36 篇」钉死，比人眼过一遍标题可靠。**它红了就是硬故障，停下来查清，不要靠改数字过。**
+
+**为什么这三条非做不可。** 它们各自对应一种**实测过**的失败方式，而且**没有一个是崩溃**：
+
+- 26/36 篇的标签行若没被剥掉，会作为 `<p>#DP #单调队列</p>` **显示在文章正文里**。我用 Astro 自己的 markdown 管线（`@astrojs/markdown-remark`）渲染验证过：CommonMark 要求 `#` 后有空格才算标题，所以 `#DP #单调队列` 是**普通段落，可见**（而 `## 题目描述` 是真标题，不受影响）。
+- 8/36 篇的**卡片摘要会整条变成标签串**（如 `#DP #双连通分量 #组合计数`）——`extractDescription` 的跳过规则同样要求 `#` 后有空格，所以它挑中了这一行。
+- 症状都只是「页面变丑」，没有任何报错。**不靠读数发现不了。**
 
 - [ ] **Step 5: 验证幂等性与清理路径（这两条在 T10 阶段做不到，只能在这里做）**
 
@@ -3000,39 +3519,161 @@ npm run sync
 
 **5a. 幂等性：第二次运行必须一个字节都不改。**
 
-```bash
-find src/content/blog -name '*.md' | sort | xargs sha256sum > /tmp/probe-before.txt
-npm run sync
-find src/content/blog -name '*.md' | sort | xargs sha256sum > /tmp/probe-after.txt
-diff /tmp/probe-before.txt /tmp/probe-after.txt && echo '幂等：36 个文件逐字节未变'
+写到 `.superpowers/sdd/2026-09-21-personal-blog/probe-idempotent.mjs`（**不要写进仓库**）：
+
+```js
+// 幂等性探针：snapshot 存一份逐篇 sha256，compare 比对。
+//
+// 为什么不用 `find ... | xargs sha256sum`：管道会把退出码变成最后一个命令的，
+// 更要紧的是万一 find 一无所获，两次快照都是**空文件**，diff 会照样「通过」——
+// 那是个假绿灯，而这条验证的全部意义就在于不能是假的。
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import crypto from 'node:crypto';
+
+const ROOT = path.resolve(import.meta.dirname, '..', '..', '..');
+const DIR = path.join(ROOT, 'src', 'content', 'blog');
+const SNAP = path.join(import.meta.dirname, 'probe-idempotent-snapshot.json');
+
+const mode = process.argv[2];
+if (mode !== 'snapshot' && mode !== 'compare') {
+  console.error('用法：node probe-idempotent.mjs snapshot | compare');
+  process.exit(2);
+}
+
+const files = (await fs.readdir(DIR)).filter((f) => f.endsWith('.md')).sort();
+const hashes = {};
+for (const f of files) {
+  hashes[f] = crypto.createHash('sha256').update(await fs.readFile(path.join(DIR, f))).digest('hex');
+}
+
+if (mode === 'snapshot') {
+  // 快照阶段就先卡篇数：空目录也「快照成功」的话，后面比的是一对空清单。
+  if (files.length !== 36) {
+    console.error(`快照时读到 ${files.length} 篇，预期 36 篇——先查清，这次比对没有意义`);
+    process.exit(1);
+  }
+  await fs.writeFile(SNAP, JSON.stringify(hashes, null, 2), 'utf8');
+  console.log('已快照 36 篇的 sha256 → probe-idempotent-snapshot.json');
+  process.exit(0);
+}
+
+const before = JSON.parse(await fs.readFile(SNAP, 'utf8'));
+let bad = 0;
+if (Object.keys(before).length !== files.length) {
+  console.log(`FAIL  篇数变了：快照 ${Object.keys(before).length} 篇 → 现在 ${files.length} 篇`);
+  bad++;
+}
+const changed = files.filter((f) => before[f] !== hashes[f]);
+if (changed.length) {
+  console.log(`FAIL  ${changed.length} 篇的字节变了：\n      ` + changed.join('\n      '));
+  bad++;
+}
+if (!bad) console.log('PASS  36 篇的文件名与内容逐字节未变');
+console.log(bad ? '幂等性探针失败' : '幂等：通过');
+if (bad) process.exit(1);
 ```
 
-预期：打印 `幂等：36 个文件逐字节未变`（`diff` 无输出、退出码 0），且 `npm run sync` 报 `新增 0 / 更新 0`。
+```bash
+node .superpowers/sdd/2026-09-21-personal-blog/probe-idempotent.mjs snapshot
+npm run sync
+node .superpowers/sdd/2026-09-21-personal-blog/probe-idempotent.mjs compare
+```
 
-**这条和 T10 Step 5 的区别就是它存在的理由**：T10 时 `published` 是空集，「新增 0 / 更新 0」**在脚本彻底坏掉时也照样成立**。现在有 36 个真实文件，**只有真的判定了「内容没变就不写」才会是 0**。`sha256sum` 那一层更严——它连「改写了但字节相同」都不放过。
+预期：`已快照 36 篇的 sha256` → `npm run sync` 报 `新增 0 / 更新 0` → `PASS  36 篇的文件名与内容逐字节未变` 与 `幂等：通过`（退出码 0）。
+
+**这条和 T10 Step 5 的区别就是它存在的理由**：T10 时 `published` 是空集，「新增 0 / 更新 0」**在脚本彻底坏掉时也照样成立**。现在有 36 个真实文件，**只有真的判定了「内容没变就不写」才会是 0**。sha256 那一层更严——它连「改写了但字节相同」都不放过。
 
 **5b. 清理路径确实会删，而且只删该删的。**
 
-这一步**故意制造一次「取消发布」**。确定性挑选目标，不靠人眼：
+这一步**故意制造一次「取消发布」**。目标由脚本确定性挑选，不靠人眼，也**不靠手工改 vault**——手工那一步正是本节下面警告的坑（改错成仓库里的副本会被下次同步覆盖回来，让人以为测试通过了）。
 
-```bash
-SLUG=$(ls -1 src/content/blog/*.md | sort | head -1 | xargs -n1 basename | sed 's/\.md$//')
-SRC=$(grep -m1 '^sourcePath:' "src/content/blog/$SLUG.md" | sed 's/^sourcePath: *"//; s/"$//')
-echo "目标 slug: $SLUG"
-echo "vault 源文件: $SRC"
+写到 `.superpowers/sdd/2026-09-21-personal-blog/probe-unpublish.mjs`（**不要写进仓库**）：
+
+```js
+// 清理路径探针。全项目唯一一处破坏性操作，用它把「取消发布」做得确定、可回滚、可断言。
+// 它只碰 vault 里那一个源文件的 publish 那一行，且只改 true↔false。
+import fs from 'node:fs/promises';
+import path from 'node:path';
+
+const ROOT = path.resolve(import.meta.dirname, '..', '..', '..');
+const DIR = path.join(ROOT, 'src', 'content', 'blog');
+const STATE = path.join(import.meta.dirname, 'probe-unpublish-target.json');
+const vault = JSON.parse(await fs.readFile(path.join(ROOT, 'blog.config.json'), 'utf8')).vaultPath;
+
+const mode = process.argv[2];
+let bad = 0;
+const say = (ok, msg) => { if (!ok) bad++; console.log((ok ? 'PASS  ' : 'FAIL  ') + msg); };
+const listMd = async () => (await fs.readdir(DIR)).filter((x) => x.endsWith('.md')).sort();
+
+if (mode === 'off') {
+  const files = await listMd();
+  const file = files[0]; // 排序后第一篇——确定性，不用人眼挑
+  if (!file) throw new Error('src/content/blog 里没有 .md');
+  const m = (await fs.readFile(path.join(DIR, file), 'utf8')).match(/^sourcePath: (.*)$/m);
+  if (!m) throw new Error(file + ' 的 frontmatter 里没有 sourcePath 行');
+  const rel = JSON.parse(m[1].trim()); // 带引号的 JSON 字符串，解析比剥引号可靠
+  const abs = path.join(vault, rel);
+  const src = await fs.readFile(abs, 'utf8');
+  // 先确认此刻确实是 true 再改：状态不对就停，别在不明状态上做破坏性操作。
+  if (!/^publish: true$/m.test(src)) throw new Error(abs + ' 里没有 `publish: true`，先查清状态');
+  await fs.writeFile(abs, src.replace(/^publish: true$/m, 'publish: false'), 'utf8');
+  await fs.writeFile(STATE, JSON.stringify({ file, rel, abs }), 'utf8');
+  console.log('已把 vault 里的源文件改成 publish: false');
+  console.log('  生成文件: ' + file);
+  console.log('  vault 源: ' + rel);
+} else if (mode === 'on') {
+  const st = JSON.parse(await fs.readFile(STATE, 'utf8'));
+  const src = await fs.readFile(st.abs, 'utf8');
+  await fs.writeFile(st.abs, src.replace(/^publish: false$/m, 'publish: true'), 'utf8');
+  console.log('已还原 publish: true → ' + st.rel);
+} else if (mode === 'check') {
+  const st = JSON.parse(await fs.readFile(STATE, 'utf8'));
+  const files = await listMd();
+  say(files.length === 35, `剩余文章数 === 35（读到 ${files.length}）`);
+  say(!files.includes(st.file), `${st.file} 的副本已被移除`);
+
+  // 源文件必须**还在**。同步只删仓库里的副本，绝不动 vault——这条红了就是真事故。
+  const still = await fs.stat(st.abs).then(() => true, () => false);
+  say(still, 'vault 里的源文件仍在（同步只删副本，不动源）');
+
+  // 删除清单必须逐条可解释：明细里**恰好一行**，且就是刚取消发布的那一篇。
+  // 这条防的是「某个 publishDir 被改名/消失、别的目录仍产出候选」那种不对称删除——
+  // 那时删除会照常发生、报告只写「已删除: N 篇」，没有任何一处提示你丢了一整个目录。
+  const log = await fs.readFile(process.argv[3], 'utf8');
+  const detail = log.split('\n').filter((l) => /^ {4}- /.test(l));
+  say(/^ {2}已删除: +1 篇$/m.test(log), '同步报告写的是「已删除: 1 篇」');
+  say(detail.length === 1 && detail[0] === '    - ' + st.file,
+    `删除明细恰好一行且是它（读到 ${detail.length} 行：${JSON.stringify(detail)}）`);
+
+  console.log(bad ? '清理路径探针失败' : '清理路径：通过');
+  if (bad) process.exit(1);
+} else {
+  console.error('用法：node probe-unpublish.mjs off | check <同步日志> | on');
+  process.exit(2);
+}
 ```
 
-**去改 vault 里那个 `$SRC`**，把 `publish: true` 改成 `publish: false`，然后：
+```bash
+node .superpowers/sdd/2026-09-21-personal-blog/probe-unpublish.mjs off
+npm run sync > /tmp/t11-cleanup.txt 2>&1
+cat /tmp/t11-cleanup.txt
+node .superpowers/sdd/2026-09-21-personal-blog/probe-unpublish.mjs check /tmp/t11-cleanup.txt
+```
+
+预期：`off` 打印目标的两行；同步报告 `已删除: 1 篇` 且明细只有一行；`check` **五条**全 `PASS`、打印 `清理路径：通过`（退出码 0）。
+
+**然后还原并确认回到 36 篇：**
 
 ```bash
+node .superpowers/sdd/2026-09-21-personal-blog/probe-unpublish.mjs on
 npm run sync
-echo "剩余文章数: $(ls -1 src/content/blog/*.md | wc -l)"        # 应为 35
-test -f "src/content/blog/$SLUG.md" && echo '!! 该篇没被删掉' || echo '清理生效：该篇已移除'
+node .superpowers/sdd/2026-09-21-personal-blog/probe-idempotent.mjs compare
 ```
 
-预期：`已删除: 1 篇`；文章数 **35**；打印 `清理生效：该篇已移除`。
+预期：`已还原 publish: true`；同步报 `新增 1 / 更新 0`；`compare` 打印 `PASS  36 篇的文件名与内容逐字节未变` 与 `幂等：通过`。
 
-**最后把 `$SRC` 改回 `publish: true` 并重跑 `npm run sync`**，确认文章数回到 **36**，且该篇的 `sha256sum` 与 `/tmp/probe-before.txt` 里那一行**逐字符相同**（位置相同、哈希相同）。
+**最后的 `compare` 不是顺手带的**：它要求恢复出来的那一篇与 5a 快照时的**哈希逐字符相同**——即「删掉再重建」得到的必须是原来那个字节，而不是一个内容相近的新文件。
 
 **为什么这条不能省。** 这是全项目**唯一一处破坏性操作**，而且到这一步为止**从没被执行过**：
 
@@ -3046,7 +3687,13 @@ test -f "src/content/blog/$SLUG.md" && echo '!! 该篇没被删掉' || echo '清
 npm run check:math
 ```
 
-预期：理想情况下「公式检查通过」。**更可能的情况是列出若干问题**——这些是源文件里真实存在的写法错误（例如孤立未闭合的 `$$`）。逐条回到 Obsidian 修正，然后重跑 `npm run sync` 与 `npm run check:math`，直到通过。
+预期：理想情况下「公式检查通过」。**更可能的情况是列出若干问题**——这些是源文件里真实存在的写法错误（例如孤立未闭合的 `$$`）。
+
+**裁决：`check:math` 报了问题就如实记录，不要动手修。** 这一步的任务边界是**给 36 个文件各加 3 行 frontmatter**；去改笔记的**正文**（公式定界符、callout 语法）是另一件事、另一个范围，没有获得批准。那些正文是用户自己的笔记，改哪个字该由他决定。
+
+所以：把 `check:math` 的完整输出**原样贴进报告**，逐条给出「哪个文件、第几行、什么问题」，然后继续走 Step 7（构建）。构建与它无关——`check:math` 是**信息性**的，不是门禁。**唯一例外**：如果某个问题会让 `npm run build` 失败（例如 YAML 解析炸掉），那就停下报告，不要自行改正文绕过。
+
+（这条与 Step 5b 的破坏性验证不同：5b 改的是 frontmatter 里的 `publish` 开关，改完就还原，且**本来就是这一步要验的东西**。）
 
 - [ ] **Step 7: 构建并检查是否有 schema 错误**
 
@@ -3110,7 +3757,11 @@ if (bad) process.exit(1);
 
 预期：全部 PASS。
 
-**这条也要求自证判别力**：把 `src/pages/tags/[tag].astro` 里 filter 的 `p.data.tags.includes(tag) || p.data.category === tag` 改成 `true`，重新 `npm run build` 并重跑本脚本，**必须看到第 2 条与第 3 条变红**（详情页会列出全部 36 篇，而总览页报的仍是各标签的真实篇数）。然后还原、重建、再跑一遍确认全绿。**看不到红就说明这条验证没有判别力，不要以「全绿」收尾。**
+**这条也要求自证判别力**：把 `src/pages/tags/[tag].astro` 里 filter 的 `p.data.tags.includes(tag) || p.data.category === tag` 改成 `true`，重新 `npm run build` 并重跑本脚本，**必须看到那三条「`/tags/<名字> 卡片数 === N`」的详情页断言变红**（详情页会列出全部 36 篇，而总览页报的仍是各标签的真实篇数）。
+
+**下面这几条应当保持绿，别把它们当成失败**：总览页总篇数、标签数 > 0、没有标签含 `/`、以及「存在不覆盖全部文章的标签」——它们只读**总览页**，而变异改的是 `[tag].astro`，总览页不受影响。**这正是「红集要可解释」的意思**：红的三条与绿的四条，各自都能说出为什么。
+
+然后还原、重建、再跑一遍确认全绿。**看不到红就说明这条验证没有判别力，不要以「全绿」收尾。**
 
 - [ ] **Step 9: 截图抽查三篇**
 
