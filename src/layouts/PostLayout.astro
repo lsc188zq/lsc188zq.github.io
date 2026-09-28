@@ -3,6 +3,7 @@ import katexCss from 'katex/dist/katex.min.css?url';
 import BaseLayout from './BaseLayout.astro';
 import TableOfContents from '../components/TableOfContents.astro';
 import CodeEnhance from '../components/CodeEnhance.astro';
+import Comments from '../components/Comments.astro';
 import '../styles/prose.css';
 
 interface Props {
@@ -41,10 +42,15 @@ const hasMath = /\$[^$\n]+\$|\$\$[\s\S]+?\$\$/.test(bodyNoCode);
 <BaseLayout title={post.data.title} description={post.data.description}>
   {hasMath && <link rel="stylesheet" href={katexCss} />}
   <div class="post-grid">
-    <article>
-      <a class="back" href="/">← 返回文章列表</a>
+    <article data-pagefind-body>
+      {/* 下面两处 data-pagefind-ignore 是**承重的**，别当冗余属性删掉：
+          它们把「← 返回文章列表」和 meta 行的「日期 / 分类 / 约 N 分钟」从 Pagefind 索引里
+          剔除。实测（Pagefind 1.5.2）：这两串文字在加属性之前出现在 28/28 篇文章的索引片段里，
+          加上之后是 0/28。删掉不会有任何测试变红——只会在搜索结果里重新混进这类导航噪声。 */}
+      <a class="back" href="/" data-pagefind-ignore>← 返回文章列表</a>
       <h1 class="title">{post.data.title}</h1>
-      <div class="meta">
+      {/* 同上，承重：没有它「约 N 分钟」「2024-xx-xx」会进索引。 */}
+      <div class="meta" data-pagefind-ignore>
         <span>{iso}</span>
         <span class="cat">{post.data.category}</span>
         <span>约 {minutes} 分钟</span>
@@ -55,14 +61,22 @@ const hasMath = /\$[^$\n]+\$|\$\$[\s\S]+?\$\$/.test(bodyNoCode);
         </div>
       )}
       <div class="prose"><slot /></div>
+      {/* nav.pn 上那个 data-pagefind-ignore 是**惰性**的，与上面两处不同：
+          Pagefind 1.5.2 默认不索引 <nav>，实测加不加都是 0/28 篇命中。
+          留着无害（防上游改默认行为），但它不是「删了会出 bug」的那类，别拿它当先例。 */}
       {(prev || next) && (
-        <nav class="pn">
+        <nav class="pn" data-pagefind-ignore>
           {prev ? <a class="pn-item" href={`/posts/${prev.id}`}><span class="pn-lbl">← 上一篇</span><span class="pn-ttl">{prev.title}</span></a> : <span />}
           {next ? <a class="pn-item" href={`/posts/${next.id}`}><span class="pn-lbl">下一篇 →</span><span class="pn-ttl">{next.title}</span></a> : <span />}
         </nav>
       )}
     </article>
     <TableOfContents headings={headings} />
+    {/* 评论块必须在 .post-grid **内部**：放在 grid 外面时它横跨整张网格
+        （1100px 视口下宽 1048px，而正文列只有 850px，右边多出 198px），
+        giscus 的 iframe 也会跟着比正文宽一截。列位由 Comments 的
+        `grid-column: 1` 钉死，见该组件 <style> 里的说明。 */}
+    <Comments />
   </div>
   <CodeEnhance />
 </BaseLayout>

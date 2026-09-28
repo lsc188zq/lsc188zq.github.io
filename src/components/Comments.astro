@@ -1,0 +1,84 @@
+---
+// giscus 配置。两个 ID 需要用户从 https://giscus.app 获取后填入。
+const REPO = 'lsc188zq/lsc188zq.github.io';
+const REPO_ID = 'REPLACE_WITH_REPO_ID';
+const CATEGORY_ID = 'REPLACE_WITH_CATEGORY_ID';
+
+// 判定写成肯定式 + trim()，两个理由：
+// 1) 否定式 `!v.startsWith('REPLACE')` 对**空串**求值为 true——用户把 ID 清空时会被
+//    判成「已配置」，渲染一个 data-repo-id="" 的 giscus 脚本（一个加载不出来的评论框），
+//    恰好绕过了这段代码存在的唯一理由：告诉用户去填。
+// 2) 从 giscus.app 复制 ID 时很容易带上前导空格，trim() 让这种输入照样算已填。
+const filled = (v) => v.trim().length > 0 && !v.trim().startsWith('REPLACE');
+const configured = filled(REPO_ID) && filled(CATEGORY_ID);
+---
+{
+  configured ? (
+    <section class="comments">
+      <div class="comments-title">评论</div>
+      {/* data-theme 固定为 dark，**不要**改成 preferred_color_scheme。
+          依据设计文档 10.1「初始主题：固定深色，不跟随系统偏好」——深色终端风是设计意图的
+          一部分，不是偏好项；跟随操作系统偏好会让浅色系统的访客看到「深色站点 + 浅色评论区」。
+          （跟随本站的手动主题切换需要额外的 postMessage 同步脚本，不在范围内。） */}
+      <script
+        is:inline
+        src="https://giscus.app/client.js"
+        data-repo={REPO}
+        data-repo-id={REPO_ID}
+        data-category="Announcements"
+        data-category-id={CATEGORY_ID}
+        data-mapping="pathname"
+        data-strict="1"
+        data-reactions-enabled="1"
+        data-emit-metadata="0"
+        data-input-position="top"
+        data-theme="dark"
+        data-lang="zh-CN"
+        data-loading="lazy"
+        crossorigin="anonymous"
+        async
+      />
+    </section>
+  ) : (
+    <section class="comments-placeholder">
+      评论区尚未配置。参见设计文档第 10.3 节，在 https://giscus.app 获取
+      <code>data-repo-id</code> 与 <code>data-category-id</code> 后填入
+      <code>src/components/Comments.astro</code>。
+    </section>
+  )
+}
+
+<style>
+  /* 底部两条规则里的 grid-column: 1 是承重的，不是样式偏好。
+     <Comments /> 是 PostLayout 的 .post-grid（两列：正文 1fr + 目录 168px）的子元素，
+     按源码顺序排在 <TableOfContents /> 之后。当文章没有 H2/H3 时 TableOfContents 渲染为
+     空，评论块就成了第 2 个子元素，自动排布会把它塞进第 2 列那个 168px 的窄列。
+     grid-column: 1 显式钉死列位，不依赖「目录恰好存在」这个前提。
+     这两个元素是模板里的静态节点、带 data-astro-cid，所以 scoped CSS 命得中。 */
+  .comments { grid-column: 1; margin-top: 34px; padding-top: 20px; border-top: 1px solid var(--bd); }
+  .comments-title {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: .12em;
+    color: var(--fa);
+    text-transform: uppercase;
+    margin-bottom: 14px;
+  }
+  .comments-placeholder {
+    grid-column: 1;
+    margin-top: 34px;
+    padding: 20px;
+    border: 1px dashed var(--bd);
+    border-radius: 9px;
+    color: var(--fa);
+    font-size: 12.5px;
+    line-height: 1.8;
+  }
+  .comments-placeholder code {
+    font-family: var(--mono);
+    background: var(--chip);
+    border: 1px solid var(--bd);
+    border-radius: 4px;
+    padding: 1px 5px;
+  }
+</style>

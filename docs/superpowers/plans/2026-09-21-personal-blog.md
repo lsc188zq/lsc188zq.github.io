@@ -4265,23 +4265,48 @@ node -e "import('playwright-core').then(async({chromium})=>{const b=await chromi
 
 **核对 JavaScript 预算**（全局约束：自有 JS ≤ ~90 行 / 3 KB，**不含 `pagefind/`**）。
 
-这条必须**同时**跨过内联与打包两类脚本。注意「只数内联脚本」是测不出预算的——自家的主题切换、分类筛选、目录高亮、代码复制/折叠**全部是打包后的外部 `.js`**，页面上唯一的内联脚本只有 `<head>` 里那个 FOUC IIFE。所以下面这条命令按**文件**列出并累加：
+**先纠正本节原先写错的两个前提——已在真实站点上量过，别照旧版做。**
+
+原来这里写「自家的主题切换、分类筛选、目录高亮、代码复制/折叠**全部是打包后的外部 `.js`**，
+所以按文件列出并累加」。**那句是错的。** 实测（28 篇、59 个 HTML 页面的构建产物）：
+
+- `dist/` 下**一个自有的 `.js` 文件都没有**。全部 6 个 `.js` 都在 `dist/pagefind/` 里。
+- 站点自有的 JavaScript **全部内联在 HTML 里**——Astro 对小于 4096 B 的脚本默认内联，
+  而这个项目每个组件的脚本都小，所以一个都没被打包成外部文件。
+
+于是**旧版那条「walk dist 找 .js 文件」的命令会找到 0 个文件、报「自有 JS 合计: 0 行 / 0.0 KB」、
+然后 PASS**。它什么都没量到。这就是本项目栽过七次的那个模式（检查没跑却说通过），
+只不过这次它写在计划里、不执行到这一步根本不会暴露。
+
+所以判据要换成：**按页累加内联脚本的字节数，取单页峰值**——预算本就是「用户每页要下载多少自有 JS」。
+下面这条按**页**列出并取最大值：
 
 ```bash
-node -e "import('fs').then(async fs=>{const out=[];async function walk(d){for(const e of await fs.readdirSync(d,{withFileTypes:true})){const f=d+'/'+e.name;if(e.isDirectory())await walk(f);else if(e.name.endsWith('.js')&&!f.includes('pagefind')){const s=fs.readFileSync(f,'utf8');out.push([f,s.split('\n').filter(l=>l.trim()).length,fs.statSync(f).size]);}}}await walk('dist');out.sort((a,b)=>b[2]-a[2]);let L=0,B=0;for(const[f,l,b]of out){L+=l;B+=b;console.log(String(l).padStart(5)+' 行 '+String((b/1024).toFixed(1)).padStart(7)+' KB  '+f);}console.log('-----');console.log('自有 JS 合计: '+L+' 行 / '+(B/1024).toFixed(1)+' KB');})"
+node -e "import('fs').then(fs=>{const pages=[];(function w(d){for(const e of fs.readdirSync(d,{withFileTypes:true})){const f=d+'/'+e.name;if(e.isDirectory())w(f);else if(e.name.endsWith('.html'))pages.push(f);}})('dist');const per=pages.map(p=>{const h=fs.readFileSync(p,'utf8');const m=[...h.matchAll(/<script(?![^>]*\ssrc=)[^>]*>([\s\S]*?)<\/script>/g)];let b=0,l=0;for(const x of m){b+=Buffer.byteLength(x[1],'utf8');l+=x[1].split('\n').filter(s=>s.trim()).length;}return {p:p,b:b,l:l,n:m.length};}).sort((a,b)=>b.b-a.b);for(const x of per.slice(0,5))console.log(String(x.b).padStart(6)+' B  '+String(x.l).padStart(3)+' 行  '+String(x.n).padStart(2)+' 个脚本  '+x.p);console.log('-----');const t=per[0];console.log('单页自有 JS 峰值: '+t.b+' B ('+(t.b/1024).toFixed(1)+' KB) / '+t.l+' 行 / '+t.n+' 个脚本  出现在 '+t.p);console.log('预算 3072 B → '+(t.b<=3072?'未超':'已超'));})"
 ```
 
-预期：合计 **≤ 90 行 / ≤ 3 KB**。**判据是体积**——超过 3 KB 才算失控；行数只作参考。
+正则只收**没有 `src=` 属性**的 `<script>`，所以 giscus 那个外链脚本与 Pagefind 自身都被排除，
+与全局约束「不含第三方」一致。
 
-若列表里出现了**你不认识的文件**（例如某个 Astro 注入的 runtime chunk），**原样报上来，不要自行归类为"第三方、不计入"**——那正是这条检理想的漏掉的东西。
+**预期读数（T12 完成后的实测值，不是估算）：**
 
-再单独确认一次内联脚本（只为证明 FOUC 脚本确实是内联的，不是拿来当预算的）：
+| 页 | 字节 | 行 | 脚本数 |
+|---|---|---|---|
+| 首页 `dist/index.html` | **2991 B（2.9 KB）** | **48** | 4 |
+| 其余页面（文章页等） | 2358 B（2.3 KB） | 14 | 4 |
 
-```bash
-node -e "import('fs').then(fs=>{const h=fs.readFileSync('dist/index.html','utf8');const m=[...h.matchAll(/<script(?![^>]*src)[^>]*>([\s\S]*?)<\/script>/g)];let n=0;for(const x of m)n+=x[1].split('\n').filter(l=>l.trim()).length;console.log('首页内联脚本行数:',n);})"
-```
+**判据：单页峰值 ≤ 3072 B（3 KB）。** 当前 2991 B，**只剩 81 字节余量**——没超，但很紧。
+若 T13 之后这个数**变大**（T13 只加 about/404 与工作流，不该变大），要查清是什么加进来的。
 
-预期：**个位数**（只有 FOUC 那个 IIFE，约 8 行）。若这里冒出二十几行，说明有脚本没被打包而是内联进了页面——那要查清楚，别当好事。
+**行数只作参考，体积才是判据**（全局约束原文：超过 3 KB 才算失控）。
+
+**另一处要纠正的预期：** 旧版说「首页内联脚本应是个位数（只有 FOUC 那个 IIFE，约 8 行），
+若冒出二十几行说明有脚本没被打包而是被内联了——那要查清楚，**别当好事**」。
+**实测是 48 行，而这是 Astro 的正常默认行为**（< 4096 B 的脚本默认内联），不是问题。
+那句「别当好事」的解读是错的——**内联本身不是缺陷，只要总量在预算内**。
+
+**若列表里出现你不认识的东西，原样报上来，不要自行归类为「第三方、不计入」。**
+那正是这条检理想的漏掉的东西（第 8 次那个模式就是这么来的）。
 
 - [ ] **Step 6: 提交**
 
