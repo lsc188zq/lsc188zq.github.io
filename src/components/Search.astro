@@ -1,3 +1,7 @@
+---
+// .sr-* 是脚本 innerHTML 注入的节点，scoped CSS 命不中，必须走全局表（见文件内注释）。
+import '../styles/search.css';
+---
 <div class="search" id="search">
   <input
     id="search-input"
@@ -35,13 +39,6 @@
     overflow-y: auto;
     box-shadow: 0 8px 24px rgba(0, 0, 0, .28);
   }
-  .sr-item { display: block; padding: 11px 14px; border-bottom: 1px solid var(--bd); }
-  .sr-item:last-child { border-bottom: 0; }
-  .sr-item:hover { background: var(--chip); text-decoration: none; }
-  .sr-title { font-size: 13.5px; font-weight: 600; color: var(--tx); margin-bottom: 4px; }
-  .sr-excerpt { font-size: 12px; line-height: 1.65; color: var(--mu); }
-  .sr-excerpt mark { background: transparent; color: var(--ac); font-weight: 600; }
-  .sr-empty { padding: 14px; font-size: 12.5px; color: var(--fa); }
 </style>
 
 <!--

@@ -1,0 +1,17 @@
+/* 搜索结果面板里 .sr-* 的样式必须放在全局表里。
+   结果列表是运行时用 innerHTML 拼字符串塞进 #search-results 的，这些节点
+   拿不到 Astro 编译期发给模板元素的 data-astro-cid-* 属性，而 scoped CSS 靠
+   `.sr-item[data-astro-cid-…]` 这样的属性选择器生效——属性不存在，规则就永远
+   命不中（实测：命中词退回浏览器默认的黄色 <mark>，两条结果挤成一坨）。
+   先例：CodeEnhance 给运行时创建的 .code-fold / .copy-btn 的样式放在 prose.css。
+
+   不在 global.css 里：Astro 按页面渲染了哪些组件决定 CSS 打包，本文件只进
+   渲染了 <Search /> 的页面（目前是首页），28 个文章页不会白白多背这几百字节。 */
+
+.sr-item { display: block; padding: 11px 14px; border-bottom: 1px solid var(--bd); }
+.sr-item:last-child { border-bottom: 0; }
+.sr-item:hover { background: var(--chip); text-decoration: none; }
+.sr-title { font-size: 13.5px; font-weight: 600; color: var(--tx); margin-bottom: 4px; }
+.sr-excerpt { font-size: 12px; line-height: 1.65; color: var(--mu); }
+.sr-excerpt mark { background: transparent; color: var(--ac); font-weight: 600; }
+.sr-empty { padding: 14px; font-size: 12.5px; color: var(--fa); }

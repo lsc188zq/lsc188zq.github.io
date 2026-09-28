@@ -43,9 +43,9 @@ const hasMath = /\$[^$\n]+\$|\$\$[\s\S]+?\$\$/.test(bodyNoCode);
   {hasMath && <link rel="stylesheet" href={katexCss} />}
   <div class="post-grid">
     <article data-pagefind-body>
-      <a class="back" href="/">← 返回文章列表</a>
+      <a class="back" href="/" data-pagefind-ignore>← 返回文章列表</a>
       <h1 class="title">{post.data.title}</h1>
-      <div class="meta">
+      <div class="meta" data-pagefind-ignore>
         <span>{iso}</span>
         <span class="cat">{post.data.category}</span>
         <span>约 {minutes} 分钟</span>
@@ -57,7 +57,7 @@ const hasMath = /\$[^$\n]+\$|\$\$[\s\S]+?\$\$/.test(bodyNoCode);
       )}
       <div class="prose"><slot /></div>
       {(prev || next) && (
-        <nav class="pn">
+        <nav class="pn" data-pagefind-ignore>
           {prev ? <a class="pn-item" href={`/posts/${prev.id}`}><span class="pn-lbl">← 上一篇</span><span class="pn-ttl">{prev.title}</span></a> : <span />}
           {next ? <a class="pn-item" href={`/posts/${next.id}`}><span class="pn-lbl">下一篇 →</span><span class="pn-ttl">{next.title}</span></a> : <span />}
         </nav>
