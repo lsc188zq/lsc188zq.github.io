@@ -1273,14 +1273,16 @@ const toc = headings.filter((h) => h.depth === 2 || h.depth === 3);
 <script>
   const links = Array.from(document.querySelectorAll('.toc-link'));
 
-  // 缓存每个标题的**文档绝对位置**。getBoundingClientRect().top + scrollY 与当前
-  // 滚动位置无关，所以只需在加载和 resize 时各算一次——scroll 回调里就不读布局了。
+  // 标题位置与最大滚动量只在 measure() 里读一次并缓存：scroll 回调里再读
+  // scrollHeight 会强制同步布局，而滚动回调每帧都会跑。
   let tops = [];
+  let maxScroll = 0;
   const measure = () => {
     tops = links.map((l) => {
       const el = document.getElementById(l.dataset.target);
       return el ? el.getBoundingClientRect().top + scrollY : Infinity;
     });
+    maxScroll = document.documentElement.scrollHeight - innerHeight;
   };
 
   const LINE = 0.3; // 参考线取视口高度的 30%
@@ -1291,7 +1293,6 @@ const toc = headings.filter((h) => h.depth === 2 || h.depth === 3);
     // 只写 scrollY + innerHeight >= scrollHeight - 2 的话，当文章总高不超过视口时
     // 它**恒为真**——读者明明在一篇短随笔的顶部，目录却点亮最后一节，
     // 与他实际所在的位置不符。这和上面那条"末尾够不到参考线"是同一类缺陷，只是方向相反。
-    const maxScroll = document.documentElement.scrollHeight - innerHeight;
     const atBottom = maxScroll > 0 && scrollY >= maxScroll - 2;
     // 滚到底时，末尾几节的标题因为**无处可滚**，永远到不了参考线——没有这一条，
     // 目录里最后几节永远高亮不了，点它们的链接也毫无反应。
@@ -1307,6 +1308,12 @@ const toc = headings.filter((h) => h.depth === 2 || h.depth === 3);
   sync();
   addEventListener('scroll', sync, { passive: true });
   addEventListener('resize', () => { measure(); sync(); });
+  // 稳定之后布局仍会位移（图片加载、按需注入的 KaTeX 样式表都会把标题往下推），
+  // 所以盯盒子而不是枚举原因（枚举必然漏掉下一种）：html 与 body 都观察，谁变触发谁。
+  // resize 监听保留——视口高度改变的是参考线位置，不一定改变盒子尺寸，观察器抓不到。
+  const ro = new ResizeObserver(() => { measure(); sync(); });
+  ro.observe(document.documentElement);
+  ro.observe(document.body);
 </script>
 ```
 
@@ -1601,6 +1608,7 @@ git commit -m "feat: 文章页目录、阅读时长、上下篇与公式样式"
 在 `src/styles/prose.css` 末尾追加：
 
 ```css
+
 /* ---------- 代码块 ---------- */
 
 .prose pre {
@@ -3053,10 +3061,24 @@ git commit -m "feat: 同步脚本 CLI 与配置文件"
 > **2026-09-28 用户裁决（T11 完成之后）：两篇近空笔记下架。**
 > `项目/游戏/三眼枪/版本日志.md`（原文 0 字节）与 `OI/游记/OI回忆录.md`（只有一行标题）
 > 在 vault 里的 `publish: true` 改回 `false`，重跑同步后从站点移除。
-> **本任务完成时的读数是 36 篇，而当前真实读数是 34 篇。** 下面只有 Step 4 探针的
-> **文章总数**与**分类分布**两个值随之更新（并各带一行说明），其余「36」是**迁移当时**的
-> 记叙，不改——改了就是把历史写成没发生过。两篇都没有标签，所以「带标签 26 篇」不受影响。
 > 同日用户另裁决：`游戏玩法.md` 正文里的真名**保持原样**，不做任何改动。
+>
+> **2026-09-28 用户再裁决（T11 完成之后）：游记 3 篇 + 文集 3 篇，全部不发。**
+> 用户原话「我的游记和文集全都不要上传」。`OI/游记/` 与 `文集/` 下 6 篇在 vault 里的
+> `publish` 一律改回 `false`，重跑同步后从站点移除。
+> **白名单 `publishDirs` 不动**——用户在两条路里选的是「保留白名单、逐篇关闭」这条：
+> 日后想单独放行某一篇，把那一篇改回 `publish: true` 再跑同步即可。代价是白名单还开着，
+> 日后新建的带 `publish: true` 的游记/文集仍会被同步进来；用户已知情并选择。
+>
+> **所以：本任务完成时的读数是 36 篇 → 下架两篇后 34 篇 → 再下架 6 篇后 28 篇。**
+> 下面 Step 4 探针的 **文章总数**、**带标签的篇数**、**分类分布**三个读数随之更新（各带一行说明）；
+> 其余「36」是**迁移当时**的记叙，不改——改了就是把历史写成没发生过。
+>
+> **「带标签 26 篇」也要改，因为它确实变了。** 下架的 8 篇里**有 3 篇是带标签的**
+> （`CSP-S 2024 游记.md`、`NOIP 2024游记.md`、`安老师的恩情还不完.md`，各 1 个），
+> 26 − 3 = **23**。这个数有两条独立对账：现存 28 篇里 5 篇的 `tags` 是空数组
+> （28 − 5 = 23），且把本段探针原样跑一遍读到 23、另 9 条全绿。
+> **别把它当探针坏了而去改探针**——改的是计划里的期望值，探针本身没错。
 
 **Files:**
 - Create: `scripts/check-math.mjs`
@@ -3079,8 +3101,28 @@ import { splitSegments } from './lib/transform.mjs';
 const ROOT = path.resolve(import.meta.dirname, '..');
 const DIR = path.join(ROOT, 'src', 'content', 'blog');
 
-const files = (await fs.readdir(DIR).catch(() => []))
-  .filter((f) => f.endsWith('.md') && !f.startsWith('_'));
+// 目录读不到时**必须报错退出**：原来 `readdir(DIR).catch(() => [])` 把「目录不存在」
+// 静默吞成空数组，再打印「通过：0 篇」——检查根本没跑，输出却是一片绿。
+let names;
+try {
+  names = await fs.readdir(DIR);
+} catch (e) {
+  const why = e.code === 'ENOENT' ? '目录不存在' : `目录读不了（${e.code}）`;
+  console.error(`公式检查无法运行：${why} — ${DIR}`);
+  console.error('同步脚本没跑过？先 npm run sync 再检查。');
+  process.exit(2);
+}
+
+const files = names.filter((f) => f.endsWith('.md') && !f.startsWith('_'));
+
+// 空目录同理：一篇都没检查，就不许说「通过」。派生目录为空说明同步没跑或跑坏了。
+if (files.length === 0) {
+  console.error(`公式检查无法运行：目录里没有可检查的 .md 文件（0 篇）— ${DIR}`);
+  console.error('空目录意味着同步没跑或跑坏了，此时的「通过」是假的——先 npm run sync。');
+  process.exit(2);
+}
+
+// 退出码约定：0 = 通过；1 = 跑成了、发现了问题；2 = 根本没跑成（环境问题）。
 
 const problems = [];
 
@@ -3089,13 +3131,19 @@ for (const f of files) {
 
   // 去掉 frontmatter。
   // 行号要按**文件真实行号**报，所以得记住 frontmatter 占了几行——否则报出来的
-  // 位置比实际少一个 frontmatter 的长度（本批 31 篇差 8 行；另 5 篇没有 description、
+  // 位置比实际少一个 frontmatter 的长度（本批 25 篇差 8 行；另 3 篇没有 description、
   // frontmatter 少一行，差 7 行——所以这里必须**按篇现量**，写死一个数就会错），
   // 拿着行号去 Obsidian 里找会找错地方。
+  // body 从同一份 fmMatch 上 slice，frontmatter 正则不再写第二遍——两处各写一遍时，
+  // 哪天只改一处，行号基准就会换个形式复发。
   const fmMatch = raw.match(/^---\n[\s\S]*?\n---\n/);
   const fmLines = fmMatch ? fmMatch[0].split('\n').length - 1 : 0;
-  const body = raw.replace(/^---\n[\s\S]*?\n---\n/, '');
+  const body = fmMatch ? raw.slice(fmMatch[0].length) : raw;
   const segs = splitSegments(body);
+
+  // 逐行检查的结果先攒着，和 `$$` 的结论合并去重后统一按行号顺序输出。
+  const fileProbs = [];
+  const dd = []; // 正文段里未被转义的 `$$` 出现（{ at, text }）
 
   let lineNo = 0;
   for (const seg of segs) {
@@ -3107,26 +3155,54 @@ for (const f of files) {
 
     seg.content.split('\n').forEach((line, i) => {
       const at = fmLines + startLine + i + 1;
+      const text = line.trim().slice(0, 60);
       const dollars = (line.match(/(?<!\\)\$/g) ?? []).length;
       if (dollars % 2 !== 0) {
-        problems.push(`${f}:${at}  行内 $ 数量为奇数（${dollars} 个）— ${line.trim().slice(0, 60)}`);
+        fileProbs.push({ at, kind: 'dollar', msg: `${f}:${at}  行内 $ 数量为奇数（${dollars} 个）— ${text}` });
       }
       if (/\\\(/.test(line) && !/\\\)/.test(line)) {
-        problems.push(`${f}:${at}  \\( 未闭合 — ${line.trim().slice(0, 60)}`);
+        fileProbs.push({ at, kind: 'paren', msg: `${f}:${at}  \\( 未闭合 — ${text}` });
       }
       if (/\\\[/.test(line) && !/\\\]/.test(line)) {
-        problems.push(`${f}:${at}  \\[ 未闭合 — ${line.trim().slice(0, 60)}`);
+        fileProbs.push({ at, kind: 'bracket', msg: `${f}:${at}  \\[ 未闭合 — ${text}` });
       }
+      // 块级定界符要单独数：逐行 `$` 奇偶对 `$$` 是盲的（2 个 = 偶数），一行 `$$`
+      // 的未闭合它永远报不出来。只数正文段——代码段在上面已经 continue 了。
+      const ddN = (line.match(/(?<!\\)\$\$/g) ?? []).length;
+      for (let k = 0; k < ddN; k++) dd.push({ at, text });
     });
   }
 
-  // 检查残留的 Obsidian 专有语法。
-  // **`m` 标志不能省**：没有它 `^` 只匹配整个字符串的开头，而 body 剥掉 frontmatter 后
-  // 首字符是换行（生成文件是 `---\n…\n---\n\n正文`），所以 `^>` 这一支**一次都不可能命中**
-  // ——callout 检查会变成摆设。`^` 那一支必须配 `m`，`` ```ad- `` 那一支不需要。
-  if (/```ad-|^>\s*\[!/m.test(body)) {
-    problems.push(`${f}  含 Obsidian callout / admonition 语法，博客不渲染`);
+  // 未被转义的 `$$` 总数为奇数 = 有未闭合的块级公式。贪心配对下（第 1、2 个配成一对），
+  // 落单的总是最后一个，报它的行；只出现 1 个时，它自己就是那个未闭合的开定界符。
+  if (dd.length % 2 !== 0) {
+    const last = dd[dd.length - 1];
+    // 同一行不要报两条：`$$$x`（`$$` + `$`，共 3 个 `$`）会被两条检查同时命中。
+    // 选定的优先级：**报 `$$` 未闭合、压掉同一行那条 `$` 奇偶**——它更精确，点明了
+    // 落单的是块定界符；同一行报两条是同一根因数了两遍。只压 kind: 'dollar'，
+    // `\(` / `\[` 是别的缺陷，不受影响。
+    for (let k = fileProbs.length - 1; k >= 0; k--) {
+      if (fileProbs[k].kind === 'dollar' && fileProbs[k].at === last.at) fileProbs.splice(k, 1);
+    }
+    fileProbs.push({ at: last.at, kind: 'dd', msg: `${f}:${last.at}  $$ 未闭合 — ${last.text}` });
   }
+
+  // 残留的 Obsidian 专有语法：逐行扫、报**第一处命中**的行号。
+  // 逐行判定时每行各自是单行字符串，`^` 天然匹配行首——上一轮「整段扫 + 缺 m 标志 →
+  // `^>` 那支一次都命不中」的形态从结构上不再可能；而整段 `test` 只知道「有」，
+  // 报不出行号（规格 5.4 要求 `xxx.md:42` 这种定点格式）。
+  // 扫描范围与原实现一致（整个 body，不限正文段）：` ```ad- ` 与 `> [!` 都算。
+  const bodyLines = body.split('\n');
+  for (let j = 0; j < bodyLines.length; j++) {
+    if (/^\s*>\s*\[!/.test(bodyLines[j]) || /```ad-/.test(bodyLines[j])) {
+      const at = fmLines + j + 1;
+      fileProbs.push({ at, kind: 'callout', msg: `${f}:${at}  含 Obsidian callout / admonition 语法，博客不渲染` });
+      break;
+    }
+  }
+
+  fileProbs.sort((a, b) => a.at - b.at);
+  problems.push(...fileProbs.map((p) => p.msg));
 }
 
 if (problems.length === 0) {
@@ -3261,9 +3337,9 @@ const files = (await fs.readdir(DIR)).filter((f) => f.endsWith('.md'));
 let bad = 0;
 const check = (name, ok, extra) => { if (!ok) bad++; console.log((ok ? 'PASS  ' : 'FAIL  ') + name + (extra || '')); };
 
-// 36 → 34：2026-09-28 用户裁决把 `版本日志.md` 与 `OI回忆录.md` 下架（见本节段首说明）。
-// 不要再把这个数字改回 36——那两篇是真被移除了，不是探针破了。
-check('文章总数 === 34', files.length === 34, '（读到 ' + files.length + '）');
+// 36 → 34 → 28：2026-09-28 两条裁决先后下架 2 篇和 6 篇（见本节段首说明）。
+// 不要再把数字改回去——那 8 篇是真被移除了，不是探针破了。
+check('文章总数 === 28', files.length === 28, '（读到 ' + files.length + '）');
 
 // 每篇的 sourcePath 必须落在这 5 个白名单条目下。写成「等于它、或它后面跟一个 /」，
 // 避免 `文集备份/` 这种名字被 `startsWith('文集')` 误判为合规。
@@ -3285,7 +3361,9 @@ for (const f of files) {
   if (typeof data.description === 'string' && /^(#[^\s#]+\s*)+$/.test(data.description.trim())) tagDesc.push(f);
 }
 
-check('带标签的文章数 === 26', withTags === 26, '（读到 ' + withTags + '）');
+// 36 → 34 → 28：下架的 8 篇里有 3 篇带标签，所以这个数**跟着变了**（26 → 23），
+// 不是探针破了。别改回 26。
+check('带标签的文章数 === 23', withTags === 23, '（读到 ' + withTags + '）');
 check('没有一篇来自白名单之外的目录', stray.length === 0, stray.length ? '\n      ' + stray.join('\n      ') : '');
 check('没有一篇正文还留着标签行', leftovers.length === 0, leftovers.length ? '\n      ' + leftovers.join('\n      ') : '');
 check('没有一篇的摘要还是标签串', tagDesc.length === 0, tagDesc.length ? '\n      ' + tagDesc.join('\n      ') : '');
@@ -3338,12 +3416,15 @@ check('每篇的 date 都是 YYYY-MM-DD（看原始字节）', badDate.length ==
 check('每篇的 category 都落在 6 个枚举里', badCat.length === 0, badCat.length ? '\n      ' + badCat.join('\n      ') : '');
 
 // 分布也要验，因为它独立于 `categoryFor` 的实现：只验「落在枚举里」是抓不到映射写反的
-// ——把「OI/游记」错映射成「知识」，枚举照样通过，但篇数分布会从
-// {知识:25, 游记:3, 杂谈:3, 项目:3} 变成 {知识:28, 游记:0, ...}。
-// 下面这组数字是**按目录清点**出来的（24+1 / 3 / 3 / 3，下架两篇后），不是照 categoryFor 复算的。
-// 项目 4→3、游记 3：同上，下架的正是 `项目/游戏/三眼枪/版本日志.md`（项目）
-// 与 `OI/游记/OI回忆录.md`（游记）各一篇。其余两栏不动。
-const EXPECT_CAT = { 知识: 25, 技术: 0, 项目: 3, 书单: 0, 游记: 3, 杂谈: 3 };
+// ——把「项目/游戏/三眼枪」错映射成「知识」，枚举照样通过，但篇数分布会从
+// {知识:25, 项目:3} 变成 {知识:28, 项目:0}。
+//
+// ⚠️ 这个坏法**不能再挑 `OI/游记`**：两次下架之后它已发布 0 篇，把它的映射改坏是个
+// **空操作**——分布一个数都不动，这条检查会变成永远绿的假验证。要挑一个**还有文章**的目录。
+//
+// 下面这组数字是**按目录清点**出来的（OI/算法 24 + 学习/深度学习 1 = 25、项目 3），
+// 不是照 categoryFor 复算的。两次下架后 游记 与 杂谈 各剩 0 篇。
+const EXPECT_CAT = { 知识: 25, 技术: 0, 项目: 3, 书单: 0, 游记: 0, 杂谈: 0 };
 const catDiff = Object.entries(EXPECT_CAT)
   .filter(([c, n]) => (catCount[c] ?? 0) !== n)
   .map(([c, n]) => `${c}: 期望 ${n} 篇，实际 ${catCount[c] ?? 0} 篇`);
@@ -3361,14 +3442,14 @@ if (bad) process.exit(1);
 
 | 组 | 检查 | 预期读数 |
 |---|---|---|
-| 标签链路 | 文章总数 | 34 |
-| 标签链路 | 带标签的文章数 | 26 |
+| 标签链路 | 文章总数 | 28 |
+| 标签链路 | 带标签的文章数 | 23 |
 | 标签链路 | 正文残留标签行 | 0 |
 | 标签链路 | 摘要仍是标签串 | 0 |
 | 标签链路 | 来自白名单之外目录 | 0 |
 | frontmatter | date 不是 YYYY-MM-DD | 0 |
 | frontmatter | category 越界 | 0 |
-| frontmatter | 分类分布的偏差项 | 0（分布为 知识:25 项目:3 游记:3 杂谈:3） |
+| frontmatter | 分类分布的偏差项 | 0（分布为 知识:25 项目:3） |
 | frontmatter | 空 slug | 0 |
 | frontmatter | description 与重算不一致 | 0 |
 
@@ -3380,7 +3461,7 @@ if (bad) process.exit(1);
 |---|---|
 | 某篇的 `date:` 改成 `Sun Jul 05 2026 08:00:00 GMT+0800 (中国标准时间)` | 第 6 条 |
 | 某篇的 `category:` 改成 `笔记`（不在枚举里） | 第 7、8 条（改坏一篇同时也改了分布，连带红是对的） |
-| 把 `blog.config.json` 里 `"OI/游记": "游记"` 改成 `"知识"`，重跑 `npm run sync` | 第 8 条（分布）**单独**红，第 7 条（枚举）**不红**——这正是分布检查存在的理由 |
+| 把 `blog.config.json` 里 `"项目/游戏/三眼枪": "项目"` 改成 `"知识"`，重跑 `npm run sync` | 第 8 条（分布）**单独**红，第 7 条（枚举）**不红**——这正是分布检查存在的理由。**别挑 `OI/游记`**：它已发布 0 篇，改它的映射是空操作，这条会变成永远绿的假验证 |
 | 复制一篇**带标签**的成 `src/content/blog/.md` | 第 1、2、8、9 条（点文件被计入总数、标签数与分布，连带红是对的） |
 | 删掉某篇的 `description:` 行（该篇重算非空） | 第 10 条 |
 
