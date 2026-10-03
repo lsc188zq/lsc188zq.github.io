@@ -15,7 +15,7 @@ const { title, description = 'lsc72的博客' } = Astro.props;
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     {/* 标签页标题：加站点名后缀。想只显示页面名就改回 <title>{title}</title> */}
-    <title>{title} · lsc72的博客</title>
+    <title>{title ? `${title} · lsc72的博客` : 'lsc72的博客'}</title>
     <meta name="description" content={description} />
     <!--
       必须在 <head> 内联同步执行。放到外部文件或页面底部会导致浏览器
