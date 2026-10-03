@@ -6,6 +6,14 @@
 
 .prose p { margin: 0 0 18px; }
 
+/* 首行缩进：中文小说的传统排版。
+   必须在**全局表**里，不能放 PostLayout 的 scoped <style>：正文的 <p> 是 markdown
+   渲染出来的节点，拿不到 Astro 给模板元素发的 data-astro-cid-*，scoped 规则会命不中
+   （实测：放那儿时 text-indent 的计算值是 0px）。
+   只作用于 .prose 的直接子段落，所以列表项、引用块、代码块里的 <p> 不受影响。
+   用法：笔记 frontmatter 里写 cssclasses: novel */
+article.novel .prose > p { text-indent: 2em; }
+
 .prose h2 {
   font-size: 21px;
   font-weight: 600;

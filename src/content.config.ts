@@ -14,6 +14,8 @@ const blog = defineCollection({
     draft: z.boolean().default(false),
     sourcePath: z.string().optional(),
     slug: z.string().optional(),
+    // 来自 vault 的 Obsidian cssclasses，用于给单篇文章加样式（见 PostLayout 的 CSS）
+    cssclasses: z.array(z.string()).default([]),
   }),
 });
 

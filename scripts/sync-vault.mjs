@@ -25,6 +25,18 @@ function categoryFor(relPath) {
   return best ?? config.defaultCategory;
 }
 
+// Obsidian 的 cssclasses：让一篇笔记自带 CSS 类名，用来给**单篇文章**加样式。
+// 只保留 [A-Za-z0-9_-]——这样它进 HTML 的 class 属性永远是安全的，
+// 即便将来笔记内容变成不可信来源也不会逃逸出属性。
+// Obsidian 里它是列表，但手写时可能写成单个字符串，两种都收。
+function readCssClasses(v) {
+  const list = Array.isArray(v) ? v : v ? [v] : [];
+  return list
+    .flatMap((c) => String(c).split(/\s+/))
+    .map((c) => c.replace(/[^A-Za-z0-9_-]/g, ''))
+    .filter(Boolean);
+}
+
 function buildFrontmatter(data) {
   const lines = ['---'];
   lines.push(`title: ${JSON.stringify(data.title)}`);
@@ -34,6 +46,7 @@ function buildFrontmatter(data) {
   if (data.description) lines.push(`description: ${JSON.stringify(data.description)}`);
   lines.push(`sourcePath: ${JSON.stringify(data.sourcePath)}`);
   if (data.slug) lines.push(`slug: ${JSON.stringify(data.slug)}`);
+  if (data.cssclasses?.length) lines.push(`cssclasses: ${JSON.stringify(data.cssclasses)}`);
   lines.push('---');
   return lines.join('\n');
 }
@@ -91,6 +104,7 @@ for (const rel of candidates) {
       description: parsed.data.description ?? extractDescription(body),
       sourcePath: rel,
       slug: parsed.data.slug,
+      cssclasses: readCssClasses(parsed.data.cssclasses),
     }),
     body,
   });

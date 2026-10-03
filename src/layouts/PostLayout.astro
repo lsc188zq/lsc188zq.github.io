@@ -15,6 +15,7 @@ interface Props {
       category: string;
       tags: string[];
       description?: string;
+      cssclasses?: string[];
     };
     body?: string;
   };
@@ -42,7 +43,9 @@ const hasMath = /\$[^$\n]+\$|\$\$[\s\S]+?\$\$/.test(bodyNoCode);
 <BaseLayout title={post.data.title} description={post.data.description}>
   {hasMath && <link rel="stylesheet" href={katexCss} />}
   <div class="post-grid">
-    <article data-pagefind-body>
+    {/* cssclasses 来自 vault 的笔记属性，给单篇文章加样式。
+        只保留安全的类名字符，且为空时不输出 class 属性。 */}
+    <article data-pagefind-body class={post.data.cssclasses?.length ? post.data.cssclasses.join(' ') : undefined}>
       {/* 下面两处 data-pagefind-ignore 是**承重的**，别当冗余属性删掉：
           它们把「← 返回文章列表」和 meta 行的「日期 / 分类 / 约 N 分钟」从 Pagefind 索引里
           剔除。实测（Pagefind 1.5.2）：这两串文字在加属性之前出现在 28/28 篇文章的索引片段里，
