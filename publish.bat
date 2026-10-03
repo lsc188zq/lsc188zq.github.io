@@ -27,13 +27,17 @@ git add -A
 
 git diff --cached --quiet
 if not errorlevel 1 (
-  echo     Nothing changed. Nothing to commit.
-  goto :done
+  echo     Nothing new to commit.
+) else (
+  git commit -m "content: update notes %date%"
+  if errorlevel 1 goto :fail
 )
 
-git commit -m "content: update notes %date%"
-if errorlevel 1 goto :fail
-
+REM  Push runs ALWAYS, even when there was nothing new to commit.
+REM  "nothing to commit" is NOT the same as "nothing to push" -- an earlier
+REM  version skipped the push here, so already-committed work could never go up
+REM  while the script still reported Done.
+REM  When there is nothing to push, git push is a no-op with exit code 0.
 git push
 if errorlevel 1 goto :fail
 
