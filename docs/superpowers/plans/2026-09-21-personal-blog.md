@@ -23,7 +23,9 @@
   - **禁止** `playwright install`：浏览器内核从 `cdn.playwright.dev` 下载，本机实测超时失败，且不受 npm 镜像覆盖。
   - **禁止**依赖全局安装的 `playwright`：Node 的 ESM 解析不到全局包，裸导入会报 `ERR_MODULE_NOT_FOUND`（已实测确认）。
   - `playwright-core` **不下载任何浏览器**，安装仅 1 个包、约 2 秒，且能正常驱动系统 Edge（已实测确认）。
-- **分类枚举固定为 6 个**：`知识`、`技术`、`项目`、`书单`、`游记`、`杂谈`。写错必须让构建失败。
+- **分类枚举固定为 7 个**：`知识`、`技术`、`项目`、`书单`、`游记`、`杂谈`、`文集`。写错必须让构建失败。
+  （2026-10-03 由 6 个增加到 7 个：用户要求给 vault 的 `文集/` 目录一个自己的分类，
+  不再并进 `杂谈`。`blog.config.json` 的 `categoryMap` 同步改为 `"文集": "文集"`。）
 - **颜色令牌**：深色为主题默认值，**不跟随系统偏好**。
 - **正文禁用等宽字体**（中文无等宽字形，会 fallback 导致中英混排字形不统一，字宽对不齐）。**这条的射程是「正文」，不是「全站」**——元信息、标签、分类芯片这类**微文案可以用等宽**（`.meta`、`.cat`、`.pn-lbl`、`.back`、`.tag`、`.page-sub`、`.cloud-item` 都是有意为之，属于深夜终端风的一部分）。代码块、日期、logo 当然也用等宽。
   - **射程写准的理由**：T6 评审报过一次 F4（中文微文案用等宽），根因是原句写成了「等宽**只**用于代码块、日期、标签、logo」这个正面白名单——它把 T5 已经落地并通过评审的做法（`PostCard` 的分类芯片）判成了违规。**照旧写法，T8 与 T12 会把同一条当新发现再报两遍。** 故改为对正文的否定式。
@@ -307,7 +309,7 @@ git commit -m "chore: Astro 项目脚手架与截图工具"
 创建 `src/constants.ts`：
 
 ```ts
-export const CATEGORIES = ['知识', '技术', '项目', '书单', '游记', '杂谈'] as const;
+export const CATEGORIES = ['知识', '技术', '项目', '书单', '游记', '杂谈', '文集'] as const;
 ```
 
 **为什么单独一个文件**：`content.config.ts` 依赖 `astro:content`、`astro/loaders` 这些虚拟模块，从普通组件里 import 它不一定能解析。把枚举放在无依赖的普通模块里，两边都能安全引用。
@@ -1093,7 +1095,7 @@ import { CATEGORIES } from '../constants';
 </script>
 ```
 
-筛选栏渲染全部 6 个分类，**包括当前 0 篇的**。这是刻意的：分类是固定枚举，筛选栏的宽度与顺序不应该随内容多寡抖动。空分类点进去显示「共 0 篇」是正确的反馈，不是错误。
+筛选栏渲染全部 7 个分类，**包括当前 0 篇的**。这是刻意的：分类是固定枚举，筛选栏的宽度与顺序不应该随内容多寡抖动。空分类点进去显示「共 0 篇」是正确的反馈，不是错误。
 
 - [ ] **Step 3: 创建首页**
 
@@ -3411,7 +3413,7 @@ check('没有一篇的摘要还是标签串', tagDesc.length === 0, tagDesc.leng
 // 假定：vault 的 frontmatter 里没有 category / date / description（T11 只写 publish: true）。
 // 若你以后手工往 vault 里加了这些字段，本组可能变红——那是**探针按预期工作**（脚本会把
 // `parsed.data.date` 原样写出去，而 YAML 里的日期在 JS 里是 Date 对象），改探针前先看清是哪种。
-const CATEGORIES = ['知识', '技术', '项目', '书单', '游记', '杂谈'];
+const CATEGORIES = ['知识', '技术', '项目', '书单', '游记', '杂谈', '文集'];
 const badDate = [];
 const badCat = [];
 const badSlug = [];
@@ -3447,7 +3449,7 @@ for (const f of files) {
 }
 
 check('每篇的 date 都是 YYYY-MM-DD（看原始字节）', badDate.length === 0, badDate.length ? '\n      ' + badDate.join('\n      ') : '');
-check('每篇的 category 都落在 6 个枚举里', badCat.length === 0, badCat.length ? '\n      ' + badCat.join('\n      ') : '');
+check('每篇的 category 都落在 7 个枚举里', badCat.length === 0, badCat.length ? '\n      ' + badCat.join('\n      ') : '');
 
 // 分布也要验，因为它独立于 `categoryFor` 的实现：只验「落在枚举里」是抓不到映射写反的
 // ——把「项目/游戏/三眼枪」错映射成「知识」，枚举照样通过，但篇数分布会从
@@ -3458,7 +3460,7 @@ check('每篇的 category 都落在 6 个枚举里', badCat.length === 0, badCat
 //
 // 下面这组数字是**按目录清点**出来的（OI/算法 24 + 学习/深度学习 1 = 25、项目 3），
 // 不是照 categoryFor 复算的。两次下架后 游记 与 杂谈 各剩 0 篇。
-const EXPECT_CAT = { 知识: 25, 技术: 0, 项目: 3, 书单: 0, 游记: 0, 杂谈: 0 };
+const EXPECT_CAT = { 知识: 25, 技术: 0, 项目: 2, 书单: 0, 游记: 0, 杂谈: 0, 文集: 1 };
 const catDiff = Object.entries(EXPECT_CAT)
   .filter(([c, n]) => (catCount[c] ?? 0) !== n)
   .map(([c, n]) => `${c}: 期望 ${n} 篇，实际 ${catCount[c] ?? 0} 篇`);
