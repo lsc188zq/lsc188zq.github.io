@@ -8,6 +8,7 @@ import {
   makeSlug,
   extractDescription,
   splitLeadingTags,
+  normalizeTags,
 } from '../scripts/lib/transform.mjs';
 
 test('splitSegments 把代码围栏切出来', () => {
@@ -308,4 +309,35 @@ test('splitLeadingTags 无标签行时 body 与入参逐字节相同', () => {
   const r = splitLeadingTags(md);
   assert.deepEqual(r.tags, []);
   assert.equal(r.body, md);
+});
+
+// ---- normalizeTags（frontmatter 标签正规化）----
+// 第一条是本次构建失败的承重点：vault 笔记写成 `tags: 寻金记`（Obsidian 允许标量），
+// 原样透传会被 JSON.stringify 写成 `tags: "寻金记"`，生成物不满足博客 schema 的
+// z.array(z.string())，astro build 直接报 InvalidContentEntryDataError。
+
+test('normalizeTags 把字符串标签包成单元素数组', () => {
+  assert.deepEqual(normalizeTags('寻金记'), ['寻金记']);
+});
+
+test('normalizeTags 原样保留数组标签', () => {
+  assert.deepEqual(normalizeTags(['DP', '单调队列']), ['DP', '单调队列']);
+});
+
+test('normalizeTags 把缺失或空值当作空数组', () => {
+  assert.deepEqual(normalizeTags(undefined), []);
+  assert.deepEqual(normalizeTags(null), []);
+  assert.deepEqual(normalizeTags(''), []);
+  assert.deepEqual(normalizeTags(['']), []);
+});
+
+test('normalizeTags 去掉开头的 # 与首尾空白', () => {
+  // 行内写法是 `#树形DP`，frontmatter 里手写成带 # 时也应收成同一个标签名，
+  // 否则标签页 URL 里会混进 #（浏览器当锚点，页面直接跳错）。
+  assert.deepEqual(normalizeTags(' #树形DP '), ['树形DP']);
+});
+
+test('normalizeTags 收下非字符串标量', () => {
+  // YAML 的 `tags: 2024` 是数字；直接透传同样过不了 schema。
+  assert.deepEqual(normalizeTags(2024), ['2024']);
 });

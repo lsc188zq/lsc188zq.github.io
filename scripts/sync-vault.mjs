@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import matter from 'gray-matter';
-import { normalizeMath, normalizeHeadings, makeSlug, extractDescription, splitLeadingTags } from './lib/transform.mjs';
+import { normalizeMath, normalizeHeadings, makeSlug, extractDescription, splitLeadingTags, normalizeTags } from './lib/transform.mjs';
 import { listMarkdown, gitFirstCommitDate, fileMtimeDate } from './lib/vault.mjs';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
@@ -100,7 +100,9 @@ for (const rel of candidates) {
       title,
       date,
       category: parsed.data.category ?? categoryFor(rel),
-      tags: parsed.data.tags ?? vaultTags,
+      // 必须过 normalizeTags：vault 里 `tags: 寻金记` 是标量，直接透传会被
+      // 序列化成 `tags: "寻金记"`，博客 schema 要数组，整站构建失败。
+      tags: normalizeTags(parsed.data.tags ?? vaultTags),
       description: parsed.data.description ?? extractDescription(body),
       sourcePath: rel,
       slug: parsed.data.slug,

@@ -216,3 +216,21 @@ export function splitLeadingTags(md) {
   if (j === i) return { tags: [], body: md };
   return { tags, body: lines.slice(0, i).concat(lines.slice(j)).join('\n') };
 }
+
+/**
+ * frontmatter 的 tags 正规化成字符串数组。
+ *
+ * Obsidian 里 `tags: 寻金记`（标量）与 `tags: [寻金记]`（列表）都合法，两种都要收——
+ * 只收列表的话，标量会被同步脚本的 JSON.stringify 原样写成 `tags: "寻金记"`，
+ * 而博客 schema 要求 z.array(z.string())，astro build 会以
+ * InvalidContentEntryDataError 整体失败（一篇写错，全站构建不了）。
+ * 这与 readCssClasses 处理 cssclasses 是同一类问题，方向保持一致。
+ *
+ * 顺带收两样：开头 `#`（行内标签写法，带进 URL 会被当成锚点）与首尾空白。
+ * 与 splitLeadingTags 一样按出现顺序保留，不去重——去重要求的是「同一篇里重复的标签」，
+ * 那是 splitLeadingTags 的职责；frontmatter 里手写重复属于另一回事。
+ */
+export function normalizeTags(v) {
+  const list = Array.isArray(v) ? v : v ? [v] : [];
+  return list.map((t) => String(t).trim().replace(/^#/, '').trim()).filter(Boolean);
+}
